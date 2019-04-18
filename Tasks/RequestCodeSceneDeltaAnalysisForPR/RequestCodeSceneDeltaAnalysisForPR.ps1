@@ -3,14 +3,14 @@ param()
 
 function Get-AzureDevOpsAPIHeader {
     if (!([string]::IsNullOrEmpty($configuration.azureDevOpsAPItoken))) {
-        Write-Host "Using provided Personal Access Token..."
+        Write-VstsTaskVerbose "Using provided Personal Access Token..."
         # Base64-encodes the Personal Access Token (PAT) appropriately
         $user = ""
         $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$configuration.azureDevOpsAPItoken)))
         $restApiHeader = @{Authorization=("Basic {0}" -f $base64AuthInfo)}
     }
     elseif (!([string]::IsNullOrEmpty($env:SYSTEM_ACCESSTOKEN))) {
-        Write-Host "Using shared VSTS OAuth token $($env:SYSTEM_ACCESSTOKEN)..."
+        Write-VstsTaskVerbose "Using shared VSTS OAuth token $($env:SYSTEM_ACCESSTOKEN)..."
         $restApiHeader = @{Authorization = "Bearer $env:SYSTEM_ACCESSTOKEN"}
     }
     else {
@@ -40,7 +40,8 @@ function Update-PullRequestStatus {
     $header = Get-AzureDevOpsAPIHeader
     $statusBody = $status | ConvertTo-Json
     Write-VstsTaskVerbose "Updating pull request status"
-    Invoke-RestMethod -Uri $statusApiUri -Method POST -Body $statusBody -ContentType "application/json " -Headers $header
+    $response = Invoke-RestMethod -Uri $statusApiUri -Method POST -Body $statusBody -ContentType "application/json " -Headers $header > $null
+    return $response
 }
 
 function Get-PullRequestCommits {
@@ -77,7 +78,7 @@ function Request-DeltaAnalysis {
         commits = $commitIds
         repository = $pullRequest.repositoryName
         coupling_threshold_percent = $rules.couplingThreshold
-        use_biomarkers = "true"
+        use_biomarkers = $rules.useBiomarkers
     }
     $body = $payload | ConvertTo-Json
     Write-VstsTaskVerbose "Requesting CodeScene Delta Analysis"
@@ -91,12 +92,11 @@ try {
     $pullRequest = @{}
     $rules = @{}
     $configuration = @{}
-    $pullRequestOptionalStatusContextName = "CodeSveneDeltaAnalysisOptional"
-    $pullRequestRequiredStatusContextName = "CodeSveneDeltaAnalysisRequired"
+    $pullRequestStatusContextName = "CodeScene Delta Analysis"
     $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
 
     $rules.riskLevelThreshold = Get-VstsInput -Name riskLevelThreshold -AsInt
-    $rules.riskLevelRequired = Get-VstsInput -Name riskLevelRequired -AsBool
+    $rules.useBiomarkers = Get-VstsInput -Name useBiomarkers -AsBool
     $rules.couplingThreshold = Get-VstsInput -Name couplingThreshold -AsInt
 
     $configuration.codeSceneBaseUrl = Get-VstsInput -Name codeSceneBaseUrl
@@ -127,12 +127,7 @@ try {
 
         $pullRequest.statusState = "pending"
         $pullRequest.statusDescription = "CodeScene Delta Analysis ongoing..."
-        if ($rules.riskLevelRequired) { # Add more requirements here
-            $pullRequest.statusContextName = $pullRequestRequiredStatusContextName
-        }
-        else {
-            $pullRequest.statusContextName = $pullRequestOptionalStatusContextName
-        }
+        $pullRequest.statusContextName = $pullRequestStatusContextName
         Update-PullRequestStatus -pullRequest $pullRequest -configuration $configuration
         $pullRequest.commits = Get-PullRequestCommits -pullRequest $pullRequest -configuration $configuration
         $analysisResult = Request-DeltaAnalysis -pullRequest $pullRequest -configuration $configuration -rules $rules

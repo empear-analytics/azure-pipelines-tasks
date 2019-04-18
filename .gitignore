@@ -26,4 +26,3 @@ TestRun
 .secrets
 appsettings.json
 local.settings.json
-*ps_modules

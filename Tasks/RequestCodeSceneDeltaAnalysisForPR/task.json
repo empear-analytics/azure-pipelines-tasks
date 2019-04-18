@@ -13,9 +13,16 @@
   "version": {
     "Major": "0",
     "Minor": "1",
-    "Patch": "0"
+    "Patch": "9"
   },
   "minimumAgentVersion": "1.95.0",
+  "groups": [
+      {
+          "name": "rules",
+          "displayName": "Analysis rules",
+          "isExpanded": false
+      }
+  ],
   "instanceNameFormat": "Request CodeScene Delta Analysis",
   "inputs": [
     {
@@ -51,12 +58,22 @@
       "helpMarkDown": "Specifies the password of the user with access to the CodeScene REST API."
     },
     {
+        "name": "useBiomarkers",
+        "type": "boolean",
+        "label": "Use biomarkers",
+        "defaultValue": "true",
+        "required": true,
+        "helpMarkDown": "Instructs CodeScene to look for degrading code health, and enables reporting of the quality gates state",
+        "groupName": "rules"
+    },
+    {
         "name": "riskLevelThreshold",
         "type": "pickList",
         "label": "Risk level threshold",
         "defaultValue": "7",
         "required": true,
         "helpMarkDown": "Specifies the fail threshold for risk level.",
+        "groupName": "rules",
         "options": {
             "1": "1",
             "2": "2",
@@ -68,16 +85,7 @@
             "8": "8",
             "9": "9",
             "10": "10"
-        },
-        "visibleRule": "createLogFile = true"
-    },
-    {
-        "name": "riskLevelRequired",
-        "type": "boolean",
-        "label": "Treat risk level as a required condition",
-        "defaultValue": "true",
-        "required": true,
-        "helpMarkDown": "Specifies if the risk level (when surpassing the threshold) should be treated as required"
+        }
     },
     {
         "name": "couplingThreshold",
@@ -85,7 +93,8 @@
         "label": "Coupling threshold (%)",
         "defaultValue": "80",
         "required": true,
-        "helpMarkDown": "Specifies minimal temporal coupling for the “Absence of Expected Change” warning."
+        "helpMarkDown": "Specifies minimal temporal coupling for the “Absence of Expected Change” warning.",
+        "groupName": "rules"
     }
   ],
   "execution": {
