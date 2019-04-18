@@ -1,0 +1,96 @@
+{
+  "id": "52205d50-60e9-11e9-84b5-a969771a2e11",
+  "name": "RequestCodeSceneDeltaAnalysisForPR",
+  "friendlyName": "Request CodeScene Delta Analysis for PR",
+  "description": "Requests a Delta Analysis from CodeScene on behalf of a pull request",
+  "author": "Tobias Anderson",
+  "helpMarkDown": "This task requires the agent job setting \"Allow scripts to access the OAuth token\" to be enabled, please see https://docs.microsoft.com/en-us/azure/devops/pipelines/process/phases?view=azure-devops&tabs=yaml#access-to-oauth-token. For more information regarding CodeScene Delta Analysis, please refer to the documentaion available in CodeScene (<codescene-base-url>/docs/guides/delta/automated-delta-analyses.html)",
+  "category": "Utility",
+  "visibility": [
+    "Build"
+  ],
+  "demands": [],
+  "version": {
+    "Major": "0",
+    "Minor": "1",
+    "Patch": "0"
+  },
+  "minimumAgentVersion": "1.95.0",
+  "instanceNameFormat": "Request CodeScene Delta Analysis",
+  "inputs": [
+    {
+      "name": "codeSceneBaseUrl",
+      "type": "string",
+      "label": "CodeScene base url",
+      "defaultValue": "",
+      "required": true,
+      "helpMarkDown": "Specifies the base url of the CodeScene API."
+    },
+    {
+      "name": "projectRESTEndpoint",
+      "type": "string",
+      "label": "Project REST endpoint",
+      "defaultValue": "",
+      "required": true,
+      "helpMarkDown": "Specifies the rest endpoint for the specific CodeScene project."
+    },
+    {
+      "name": "codeSceneAPIUserName",
+      "type": "string",
+      "label": "CodeScene API user name",
+      "defaultValue": "",
+      "required": true,
+      "helpMarkDown": "Specifies the name of the user with access to the CodeScene REST API."
+    },
+    {
+      "name": "codeSceneAPIPassword",
+      "type": "string",
+      "label": "CodeScene API user password",
+      "defaultValue": "",
+      "required": true,
+      "helpMarkDown": "Specifies the password of the user with access to the CodeScene REST API."
+    },
+    {
+        "name": "riskLevelThreshold",
+        "type": "pickList",
+        "label": "Risk level threshold",
+        "defaultValue": "7",
+        "required": true,
+        "helpMarkDown": "Specifies the fail threshold for risk level.",
+        "options": {
+            "1": "1",
+            "2": "2",
+            "3": "3",
+            "4": "4",
+            "5": "5",
+            "6": "6",
+            "7": "7",
+            "8": "8",
+            "9": "9",
+            "10": "10"
+        },
+        "visibleRule": "createLogFile = true"
+    },
+    {
+        "name": "riskLevelRequired",
+        "type": "boolean",
+        "label": "Treat risk level as a required condition",
+        "defaultValue": "true",
+        "required": true,
+        "helpMarkDown": "Specifies if the risk level (when surpassing the threshold) should be treated as required"
+    },
+    {
+        "name": "couplingThreshold",
+        "type": "string",
+        "label": "Coupling threshold (%)",
+        "defaultValue": "80",
+        "required": true,
+        "helpMarkDown": "Specifies minimal temporal coupling for the “Absence of Expected Change” warning."
+    }
+  ],
+  "execution": {
+    "PowerShell3": {
+      "target": "RequestCodeSceneDeltaAnalysisForPR.ps1"
+    }
+  }
+}
