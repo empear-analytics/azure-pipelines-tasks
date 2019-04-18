@@ -115,15 +115,13 @@ try {
     Write-VstsTaskVerbose "Risk level threshold:    $($rules.riskLevelThreshold)"
     Write-VstsTaskVerbose "Risk level is required:  $($rules.riskLevelRequired)"
     Write-VstsTaskVerbose "Coupling threshold:      $($rules.couplingThreshold)"
+    Write-VstsTaskVerbose "Task definitions uri:    $($configuration.taskDefinitionsUri)"
+    Write-VstsTaskVerbose "Team project:            $($configuration.teamProject)"
 
     if ($pullRequest.sourceBranch -like "*pull*") {
         $pullRequest.id = (($pullRequest.sourceBranch).Replace("refs/pull/","")).replace("/merge","")
 
-        Write-VstsTaskVerbose "Repository name:      $($pullRequest.repositoryName)"
-        Write-VstsTaskVerbose "Source branch:        $($pullRequest.sourceBranch)"
-        Write-VstsTaskVerbose "Task definitions uri: $($taskDefinitionsUri)"
-        Write-VstsTaskVerbose "Team project:         $($teamProject)"
-        Write-VstsTaskVerbose "Pull request id:      $($pullRequest.id)"
+        Write-VstsTaskVerbose "Pull request id:         $($pullRequest.id)"
 
         $pullRequest.statusState = "pending"
         $pullRequest.statusDescription = "CodeScene Delta Analysis ongoing..."
