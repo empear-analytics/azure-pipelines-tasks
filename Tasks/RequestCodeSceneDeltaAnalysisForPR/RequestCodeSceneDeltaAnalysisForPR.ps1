@@ -60,18 +60,46 @@ function Get-PullRequestCommits {
     return $commits
 }
 
-function Set-Failures {
+function Get-RiskVerdict {
+    param (
+        [Parameter(Mandatory=$true)]$risk,
+        [Parameter(Mandatory=$true)]$threshold
+    )
+    if ($risk -gt $threshold)  { 
+        return $true
+    }
+    else {
+        return $false
+    }
+}
+
+function Set-Statuses {
     param (
         [Parameter(Mandatory=$true)]$analysisResult,
         [Parameter(Mandatory=$true)]$rules
     )
 
-    $_failures = @()
-
-    if (($analysisResult.result.risk -gt $rules.riskLevelThreshold.value) -and $rules.failOnHighRisk.value)  { $_failures += $rules.failOnHighRisk.failureName }
-    if ($analysisResult.result.'quality-gates'.'degrades-in-code-health' -and $rules.failOnCodeHealthDecline.value) { $_failures += $rules.failOnCodeHealthDecline.failureName }
-    if ($analysisResult.result.'quality-gates'.'violates-goal' -and $rules.failOnViolatedGoal.value) { $_failures += $rules.failOnViolatedGoal.failureName }
-    return $_failures
+    $_statuses = @{
+        risk = @{
+            statusContextName = "CodeScene Delta Analysis risk level"
+            description = "Delta Analysis Risk level"
+        }
+        goals = @{
+            statusContextName = "CodeScene Delta Analysis goals"
+            description = "Delta Analysis Goals"
+        }
+        codeHealth = @{
+            statusContextName = "CodeScene Delta Analysis code health"
+            description = "Delta Analysis Code health"
+        }
+    }
+    $_statuses.risk.verdict = Get-RiskVerdict -risk $analysisResult.result.risk -threshold $rules.riskLevelThreshold.value
+    $_statuses.codeHealth.verdict = [boolean]($analysisResult.result.'quality-gates'.'degrades-in-code-health')
+    $_statuses.goals.verdict = [boolean]($analysisResult.result.'quality-gates'.'violates-goal')
+    if ($_statuses.risk.verdict) { $_statuses.risk.description = "Risk level is too high: $($analysisResult.result.risk)" }
+    if ($_statuses.codeHealth.verdict) { $_statuses.codeHealth.description = "Code health has declined" }
+    if ($_statuses.goals.verdict) { $_statuses.goals.description = "Goals violated" }
+    return $_statuses
 }
 
 function Set-TestAnalysisResults {
@@ -79,9 +107,9 @@ function Set-TestAnalysisResults {
         [Parameter(Mandatory=$true)]$analysisResult
     )
 
-    $analysisResult.result.risk = 8
-    $analysisResult.result.'quality-gates'.'degrades-in-code-health' = $true
-    $analysisResult.result.'quality-gates'.'violates-goal' = $true
+    $analysisResult.result.risk = 2
+    $analysisResult.result.'quality-gates'.'degrades-in-code-health' = $false
+    $analysisResult.result.'quality-gates'.'violates-goal' = $false
 
     return $analysisResult
 }
@@ -113,23 +141,26 @@ function Request-DeltaAnalysis {
     return $response
 }
 
+$pullRequestStatusStates = @{
+    $true = "failed"
+    $false = "succeeded"
+}
+
+$
+
 Trace-VstsEnteringInvocation $MyInvocation
 try {
     $pullRequest = @{}
     $rules = @{}
     $configuration = @{}
-    $pullRequestStatusContextName = "CodeScene Delta Analysis"
+    $riskLevelStatusContextName = "CodeScene risk level"
+    $goalsStatusContextName = "CodeScene goals"
+    $codeHealthStatusContextName = "CodeScene code health"
     $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
 
     $rules.useBiomarkers = @{ value = $true }
     $rules.riskLevelThreshold = @{ value = Get-VstsInput -Name riskLevelThreshold -AsInt }
-    $rules.failOnHighRisk = @{ value = Get-VstsInput -Name failOnHighRisk -AsBool }
-    $rules.failOnViolatedGoal = @{ value = Get-VstsInput -Name failOnViolatedGoal -AsBool }
-    $rules.failOnCodeHealthDecline = @{ value = Get-VstsInput -Name failOnCodeHealthDecline -AsBool }
     $rules.couplingThreshold = @{ value = Get-VstsInput -Name couplingThreshold -AsInt }
-    $rules.failOnHighRisk.failureName = "riskLevel"
-    $rules.failOnViolatedGoal.failureName = "violatedGoal"
-    $rules.failOnCodeHealthDecline.failureName = "codeHealthDecline"
 
     $configuration.codeSceneBaseUrl = Get-VstsInput -Name codeSceneBaseUrl
     $configuration.projectRESTEndpoint = Get-VstsInput -Name projectRESTEndpoint
@@ -157,14 +188,18 @@ try {
 
         Write-VstsTaskVerbose "Pull request id:                   $($pullRequest.id)"
 
-        $pullRequest.statusState = "pending"
-        $pullRequest.statusDescription = "CodeScene Delta Analysis ongoing..."
-        $pullRequest.statusContextName = $pullRequestStatusContextName
-        Update-PullRequestStatus -pullRequest $pullRequest -configuration $configuration
         $pullRequest.commits = Get-PullRequestCommits -pullRequest $pullRequest -configuration $configuration
-        $analysisResult = Request-DeltaAnalysis -pullRequest $pullRequest -configuration $configuration -rules $rules
-        # $analysisResult = Set-TestAnalysisResults -analysisResult $analysisResult
-        $failures = Set-Failures -analysisResult $analysisResult -rules $rules
+        # $analysisResult = Request-DeltaAnalysis -pullRequest $pullRequest -configuration $configuration -rules $rules
+        $analysisResult = Set-TestAnalysisResults -analysisResult $analysisResult
+        $statuses = Set-Statuses -analysisResult $analysisResult -rules $rules
+
+        foreach($status in $statuses.GetEnumerator()) {
+            Write-Host $status.Key
+            Write-Host $status.Value.description
+            Write-Host $status.Value.statusContextName
+            Write-Host $pullRequestStatusStates.Item($status.Value.verdict)
+        }
+
         if ($failures.Length -gt 0) {
             $pullRequest.statusState = "failed"
             $pullRequest.statusDescription = "CodeScene Delta Analysis failed: $($analysisResult.result.description)"
@@ -177,7 +212,7 @@ try {
             $pullRequest.statusDescription = "CodeScene Delta Analysis passed"
         }
         $pullRequest.statusTargetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
-        Update-PullRequestStatus -pullRequest $pullRequest -configuration $configuration
+        #Update-PullRequestStatus -pullRequest $pullRequest -configuration $configuration
     }
     else {
         Write-Host "Not a pull request build!"
