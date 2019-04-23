@@ -60,6 +60,32 @@ function Get-PullRequestCommits {
     return $commits
 }
 
+function Set-Failures {
+    param (
+        [Parameter(Mandatory=$true)]$analysisResult,
+        [Parameter(Mandatory=$true)]$rules
+    )
+
+    $_failures = @()
+
+    if (($analysisResult.result.risk -gt $rules.riskLevelThreshold.value) -and $rules.failOnHighRisk.value)  { $_failures += $rules.failOnHighRisk.failureName }
+    if ($analysisResult.result.'quality-gates'.'degrades-in-code-health' -and $rules.failOnCodeHealthDecline.value) { $_failures += $rules.failOnCodeHealthDecline.failureName }
+    if ($analysisResult.result.'quality-gates'.'violates-goal' -and $rules.failOnViolatedGoal.value) { $_failures += $rules.failOnViolatedGoal.failureName }
+    return $_failures
+}
+
+function Set-TestAnalysisResults {
+    param (
+        [Parameter(Mandatory=$true)]$analysisResult
+    )
+
+    $analysisResult.result.risk = 8
+    $analysisResult.result.'quality-gates'.'degrades-in-code-health' = $true
+    $analysisResult.result.'quality-gates'.'violates-goal' = $true
+
+    return $analysisResult
+}
+
 function Request-DeltaAnalysis {
     param (
         [Parameter(Mandatory=$true)]$pullRequest,
@@ -77,8 +103,8 @@ function Request-DeltaAnalysis {
     $payload = @{
         commits = $commitIds
         repository = $pullRequest.repositoryName
-        coupling_threshold_percent = $rules.couplingThreshold
-        use_biomarkers = $rules.useBiomarkers
+        coupling_threshold_percent = $rules.couplingThreshold.value
+        use_biomarkers = $rules.useBiomarkers.value
     }
     $body = $payload | ConvertTo-Json
     Write-VstsTaskVerbose "Requesting CodeScene Delta Analysis"
@@ -95,9 +121,15 @@ try {
     $pullRequestStatusContextName = "CodeScene Delta Analysis"
     $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
 
-    $rules.riskLevelThreshold = Get-VstsInput -Name riskLevelThreshold -AsInt
-    $rules.useBiomarkers = Get-VstsInput -Name useBiomarkers -AsBool
-    $rules.couplingThreshold = Get-VstsInput -Name couplingThreshold -AsInt
+    $rules.useBiomarkers = @{ value = $true }
+    $rules.riskLevelThreshold = @{ value = Get-VstsInput -Name riskLevelThreshold -AsInt }
+    $rules.failOnHighRisk = @{ value = Get-VstsInput -Name failOnHighRisk -AsBool }
+    $rules.failOnViolatedGoal = @{ value = Get-VstsInput -Name failOnViolatedGoal -AsBool }
+    $rules.failOnCodeHealthDecline = @{ value = Get-VstsInput -Name failOnCodeHealthDecline -AsBool }
+    $rules.couplingThreshold = @{ value = Get-VstsInput -Name couplingThreshold -AsInt }
+    $rules.failOnHighRisk.failureName = "riskLevel"
+    $rules.failOnViolatedGoal.failureName = "violatedGoal"
+    $rules.failOnCodeHealthDecline.failureName = "codeHealthDecline"
 
     $configuration.codeSceneBaseUrl = Get-VstsInput -Name codeSceneBaseUrl
     $configuration.projectRESTEndpoint = Get-VstsInput -Name projectRESTEndpoint
@@ -110,18 +142,20 @@ try {
     $pullRequest.repositoryId = $env:BUILD_REPOSITORY_ID
     $pullRequest.sourceBranch = $env:BUILD_SOURCEBRANCH
 
-    Write-VstsTaskVerbose "Repository name:         $($pullRequest.repositoryName)"
-    Write-VstsTaskVerbose "Source branch:           $($pullRequest.sourceBranch)"
-    Write-VstsTaskVerbose "Risk level threshold:    $($rules.riskLevelThreshold)"
-    Write-VstsTaskVerbose "Risk level is required:  $($rules.riskLevelRequired)"
-    Write-VstsTaskVerbose "Coupling threshold:      $($rules.couplingThreshold)"
-    Write-VstsTaskVerbose "Task definitions uri:    $($configuration.taskDefinitionsUri)"
-    Write-VstsTaskVerbose "Team project:            $($configuration.teamProject)"
+    Write-VstsTaskVerbose "Repository name:                   $($pullRequest.repositoryName)"
+    Write-VstsTaskVerbose "Source branch:                     $($pullRequest.sourceBranch)"
+    Write-VstsTaskVerbose "Risk level threshold:              $($rules.riskLevelThreshold)"
+    Write-VstsTaskVerbose "Fail on high delivery risk level:  $($rules.failOnHighRisk)"
+    Write-VstsTaskVerbose "Fail on violated goal:             $($rules.failOnViolatedGoal)"
+    Write-VstsTaskVerbose "Fail on code health decline:       $($rules.failOnCodeHealthDecline)"
+    Write-VstsTaskVerbose "Coupling threshold:                $($rules.couplingThreshold)"
+    Write-VstsTaskVerbose "Task definitions uri:              $($configuration.taskDefinitionsUri)"
+    Write-VstsTaskVerbose "Team project:                      $($configuration.teamProject)"
 
     if ($pullRequest.sourceBranch -like "*pull*") {
         $pullRequest.id = (($pullRequest.sourceBranch).Replace("refs/pull/","")).replace("/merge","")
 
-        Write-VstsTaskVerbose "Pull request id:         $($pullRequest.id)"
+        Write-VstsTaskVerbose "Pull request id:                   $($pullRequest.id)"
 
         $pullRequest.statusState = "pending"
         $pullRequest.statusDescription = "CodeScene Delta Analysis ongoing..."
@@ -129,15 +163,20 @@ try {
         Update-PullRequestStatus -pullRequest $pullRequest -configuration $configuration
         $pullRequest.commits = Get-PullRequestCommits -pullRequest $pullRequest -configuration $configuration
         $analysisResult = Request-DeltaAnalysis -pullRequest $pullRequest -configuration $configuration -rules $rules
-        if ($analysisResult.result.risk -gt $rules.riskLevelThreshold) { # Add more asserts here
+        # $analysisResult = Set-TestAnalysisResults -analysisResult $analysisResult
+        $failures = Set-Failures -analysisResult $analysisResult -rules $rules
+        if ($failures.Length -gt 0) {
             $pullRequest.statusState = "failed"
-            $pullRequest.statusDescription = "CodeScene Delta Analysis failed"
+            $pullRequest.statusDescription = "CodeScene Delta Analysis failed: $($analysisResult.result.description)"
+            if ($failures -eq $rules.failOnHighRisk.failureName) { $pullRequest.statusDescription += " | Risk level is too high: $($analysisResult.result.risk)" }
+            if ($failures -eq $rules.failOnViolatedGoal.failureName) { $pullRequest.statusDescription += " | Goals violated" }
+            if ($failures -eq $rules.failOnCodeHealthDecline.failureName) { $pullRequest.statusDescription += " | Code health has declined" }
         }
         else {
             $pullRequest.statusState = "succeeded"
             $pullRequest.statusDescription = "CodeScene Delta Analysis passed"
-            $pullRequest.statusTargetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
         }
+        $pullRequest.statusTargetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
         Update-PullRequestStatus -pullRequest $pullRequest -configuration $configuration
     }
     else {

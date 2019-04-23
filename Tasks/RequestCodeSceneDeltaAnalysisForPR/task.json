@@ -12,8 +12,8 @@
   "demands": [],
   "version": {
     "Major": "0",
-    "Minor": "1",
-    "Patch": "10"
+    "Minor": "2",
+    "Patch": "0"
   },
   "minimumAgentVersion": "1.95.0",
   "groups": [
@@ -58,12 +58,30 @@
       "helpMarkDown": "Specifies the password of the user with access to the CodeScene REST API."
     },
     {
-        "name": "useBiomarkers",
+        "name": "failOnHighRisk",
         "type": "boolean",
-        "label": "Use biomarkers",
+        "label": "Fail on high delivery risk level",
         "defaultValue": "true",
         "required": true,
-        "helpMarkDown": "Instructs CodeScene to look for degrading code health, and enables reporting of the quality gates state",
+        "helpMarkDown": "Specifies if the pull request status should fail when the delivery risk is above the set value",
+        "groupName": "rules"
+    },
+    {
+        "name": "failOnViolatedGoal",
+        "type": "boolean",
+        "label": "Fail on violated goal",
+        "defaultValue": "true",
+        "required": true,
+        "helpMarkDown": "Specifies if the pull request status should fail a goal is violated",
+        "groupName": "rules"
+    },
+    {
+        "name": "failOnCodeHealthDecline",
+        "type": "boolean",
+        "label": "Fail on code health decline",
+        "defaultValue": "true",
+        "required": true,
+        "helpMarkDown": "Specifies if the pull request status should fail CodeScene detects a code healt declination",
         "groupName": "rules"
     },
     {
