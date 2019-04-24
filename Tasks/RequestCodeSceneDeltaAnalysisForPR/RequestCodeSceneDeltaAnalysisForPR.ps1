@@ -22,25 +22,27 @@ function Get-AzureDevOpsAPIHeader {
 function Update-PullRequestStatus {
     param (
         [Parameter(Mandatory=$true)]$pullRequest,
+        [Parameter(Mandatory=$true)]$status,
         [Parameter(Mandatory=$true)]$configuration
     )
 
     $statusApiVersion = "4.1-preview.1"
     $statusApiUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/git/repositories/$($pullRequest.repositoryName)/pullRequests/$($pullRequest.id)/statuses?api-version=$($statusApiVersion)"
-    $status = @{
-        state = $pullRequest.statusState
-        description = $pullRequest.statusDescription
+    $body = @{
+        state = $status.Value.state
+        description = $status.Value.description
         context = @{
-            name = $pullRequest.statusContextName
+            genre = $configuration.statusGenre
+            name = $status.Value.statusContextName
         }
     }
-    if ($pullRequest.statusTargetUrl) {
-        $status.targetUrl = $pullRequest.statusTargetUrl
+    if ($status.Value.targetUrl) {
+        $body.targetUrl = $status.Value.targetUrl
     }
     $header = Get-AzureDevOpsAPIHeader
-    $statusBody = $status | ConvertTo-Json
+    $payload = $body | ConvertTo-Json
     Write-VstsTaskVerbose "Updating pull request status"
-    $response = Invoke-RestMethod -Uri $statusApiUri -Method POST -Body $statusBody -ContentType "application/json " -Headers $header > $null
+    $response = Invoke-RestMethod -Uri $statusApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header > $null
     return $response
 }
 
@@ -76,29 +78,39 @@ function Get-RiskVerdict {
 function Set-Statuses {
     param (
         [Parameter(Mandatory=$true)]$analysisResult,
+        [Parameter(Mandatory=$true)]$configuration,
         [Parameter(Mandatory=$true)]$rules
     )
 
     $_statuses = @{
         risk = @{
-            statusContextName = "CodeScene Delta Analysis risk level"
-            description = "Delta Analysis Risk level"
+            statusContextName = "delivery-risk"
+            description = "Delivery risk: $($analysisResult.result.risk)"
+            targetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
+            publish = $rules.publishDeliveryRiskStatus
         }
         goals = @{
-            statusContextName = "CodeScene Delta Analysis goals"
-            description = "Delta Analysis Goals"
+            statusContextName = "planned-goals"
+            description = "Planned goals"
+            targetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
+            publish = $rules.publishPlannedGoalsStatus
         }
         codeHealth = @{
-            statusContextName = "CodeScene Delta Analysis code health"
-            description = "Delta Analysis Code health"
+            statusContextName = "code-health"
+            description = "Code health"
+            targetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
+            publish = $rules.publishCodeHealthStatus
         }
     }
-    $_statuses.risk.verdict = Get-RiskVerdict -risk $analysisResult.result.risk -threshold $rules.riskLevelThreshold.value
-    $_statuses.codeHealth.verdict = [boolean]($analysisResult.result.'quality-gates'.'degrades-in-code-health')
-    $_statuses.goals.verdict = [boolean]($analysisResult.result.'quality-gates'.'violates-goal')
-    if ($_statuses.risk.verdict) { $_statuses.risk.description = "Risk level is too high: $($analysisResult.result.risk)" }
-    if ($_statuses.codeHealth.verdict) { $_statuses.codeHealth.description = "Code health has declined" }
-    if ($_statuses.goals.verdict) { $_statuses.goals.description = "Goals violated" }
+    $_statuses.risk.failed = Get-RiskVerdict -risk $analysisResult.result.risk -threshold $rules.riskLevelThreshold.value
+    $_statuses.goals.failed = [boolean]($analysisResult.result.'quality-gates'.'violates-goal')
+    $_statuses.codeHealth.failed = [boolean]($analysisResult.result.'quality-gates'.'degrades-in-code-health')
+    $_statuses.risk.state = $pullRequestStatusStates.Item($_statuses.risk.failed)
+    $_statuses.goals.state = $pullRequestStatusStates.Item($_statuses.goals.failed)
+    $_statuses.codeHealth.state = $pullRequestStatusStates.Item($_statuses.codeHealth.failed)
+    if ($_statuses.risk.failed) { $_statuses.risk.description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)" }
+    if ($_statuses.goals.failed) { $_statuses.goals.description = "Planned goals quality gate: Failed" }
+    if ($_statuses.codeHealth.failed) { $_statuses.codeHealth.description = "Code health quality gate: Failed" }
     return $_statuses
 }
 
@@ -108,8 +120,8 @@ function Set-TestAnalysisResults {
     )
 
     $analysisResult.result.risk = 2
-    $analysisResult.result.'quality-gates'.'degrades-in-code-health' = $false
-    $analysisResult.result.'quality-gates'.'violates-goal' = $false
+    $analysisResult.result.'quality-gates'.'degrades-in-code-health' = $true
+    $analysisResult.result.'quality-gates'.'violates-goal' = $true
 
     return $analysisResult
 }
@@ -128,16 +140,17 @@ function Request-DeltaAnalysis {
     $credentialsPair = "$($configuration.codeSceneAPIUserName):$($configuration.codeSceneAPIPassword)"
     $basicToken = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($credentialsPair))
     $header = @{ Authorization = "Basic $($basicToken)" }
-    $payload = @{
+    $body = @{
         commits = $commitIds
         repository = $pullRequest.repositoryName
         coupling_threshold_percent = $rules.couplingThreshold.value
         use_biomarkers = $rules.useBiomarkers.value
     }
-    $body = $payload | ConvertTo-Json
+    $payload = $body | ConvertTo-Json
     Write-VstsTaskVerbose "Requesting CodeScene Delta Analysis"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $response = Invoke-RestMethod -Uri $deltaAnalysisApiUri -Method POST -Body $body -ContentType "application/json " -Headers $header
+    $response = Invoke-RestMethod -Uri $deltaAnalysisApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header
+    # $response = Set-TestAnalysisResults -analysisResult $response # For testing only!
     return $response
 }
 
@@ -146,26 +159,25 @@ $pullRequestStatusStates = @{
     $false = "succeeded"
 }
 
-$
-
 Trace-VstsEnteringInvocation $MyInvocation
 try {
     $pullRequest = @{}
     $rules = @{}
     $configuration = @{}
-    $riskLevelStatusContextName = "CodeScene risk level"
-    $goalsStatusContextName = "CodeScene goals"
-    $codeHealthStatusContextName = "CodeScene code health"
-    $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
 
     $rules.useBiomarkers = @{ value = $true }
     $rules.riskLevelThreshold = @{ value = Get-VstsInput -Name riskLevelThreshold -AsInt }
     $rules.couplingThreshold = @{ value = Get-VstsInput -Name couplingThreshold -AsInt }
+    $rules.publishDeliveryRiskStatus = Get-VstsInput -Name publishDeliveryRiskStatus -AsBool
+    $rules.publishPlannedGoalsStatus = Get-VstsInput -Name publishPlannedGoalsStatus -AsBool
+    $rules.publishCodeHealthStatus = Get-VstsInput -Name publishCodeHealthStatus -AsBool
 
+    $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
     $configuration.codeSceneBaseUrl = Get-VstsInput -Name codeSceneBaseUrl
     $configuration.projectRESTEndpoint = Get-VstsInput -Name projectRESTEndpoint
     $configuration.codeSceneAPIUserName = Get-VstsInput -Name codeSceneAPIUserName
     $configuration.codeSceneAPIPassword = Get-VstsInput -Name codeSceneAPIPassword
+    $configuration.statusGenre = "codescene-delta-analysis"
     $configuration.taskDefinitionsUri = $env:SYSTEM_TASKDEFINITIONSURI
     $configuration.teamProject = $env:SYSTEM_TEAMPROJECT
     
@@ -176,9 +188,9 @@ try {
     Write-VstsTaskVerbose "Repository name:                   $($pullRequest.repositoryName)"
     Write-VstsTaskVerbose "Source branch:                     $($pullRequest.sourceBranch)"
     Write-VstsTaskVerbose "Risk level threshold:              $($rules.riskLevelThreshold)"
-    Write-VstsTaskVerbose "Fail on high delivery risk level:  $($rules.failOnHighRisk)"
-    Write-VstsTaskVerbose "Fail on violated goal:             $($rules.failOnViolatedGoal)"
-    Write-VstsTaskVerbose "Fail on code health decline:       $($rules.failOnCodeHealthDecline)"
+    Write-VstsTaskVerbose "Publish delivery risk statusl:     $($rules.publishDeliveryRiskStatus)"
+    Write-VstsTaskVerbose "Publish planned goals status:      $($rules.publishPlannedGoalsStatus)"
+    Write-VstsTaskVerbose "Publish code health status:        $($rules.publishCodeHealthStatus)"
     Write-VstsTaskVerbose "Coupling threshold:                $($rules.couplingThreshold)"
     Write-VstsTaskVerbose "Task definitions uri:              $($configuration.taskDefinitionsUri)"
     Write-VstsTaskVerbose "Team project:                      $($configuration.teamProject)"
@@ -189,30 +201,18 @@ try {
         Write-VstsTaskVerbose "Pull request id:                   $($pullRequest.id)"
 
         $pullRequest.commits = Get-PullRequestCommits -pullRequest $pullRequest -configuration $configuration
-        # $analysisResult = Request-DeltaAnalysis -pullRequest $pullRequest -configuration $configuration -rules $rules
-        $analysisResult = Set-TestAnalysisResults -analysisResult $analysisResult
-        $statuses = Set-Statuses -analysisResult $analysisResult -rules $rules
+        $analysisResult = Request-DeltaAnalysis -pullRequest $pullRequest -configuration $configuration -rules $rules
+        $statuses = Set-Statuses -analysisResult $analysisResult -rules $rules -configuration $configuration
 
         foreach($status in $statuses.GetEnumerator()) {
-            Write-Host $status.Key
-            Write-Host $status.Value.description
-            Write-Host $status.Value.statusContextName
-            Write-Host $pullRequestStatusStates.Item($status.Value.verdict)
+            Write-VstsTaskVerbose "Status context name:               $($status.Value.statusContextName)"
+            Write-VstsTaskVerbose "Status description:                $($status.Value.description)"
+            Write-VstsTaskVerbose "Status state:                      $($status.Value.state)"
+            Write-VstsTaskVerbose "Status target url:                 $($status.Value.targetUrl)"
+            if ($status.Value.publish) {
+                Update-PullRequestStatus -pullRequest $pullRequest -status $status -configuration $configuration
+            }
         }
-
-        if ($failures.Length -gt 0) {
-            $pullRequest.statusState = "failed"
-            $pullRequest.statusDescription = "CodeScene Delta Analysis failed: $($analysisResult.result.description)"
-            if ($failures -eq $rules.failOnHighRisk.failureName) { $pullRequest.statusDescription += " | Risk level is too high: $($analysisResult.result.risk)" }
-            if ($failures -eq $rules.failOnViolatedGoal.failureName) { $pullRequest.statusDescription += " | Goals violated" }
-            if ($failures -eq $rules.failOnCodeHealthDecline.failureName) { $pullRequest.statusDescription += " | Code health has declined" }
-        }
-        else {
-            $pullRequest.statusState = "succeeded"
-            $pullRequest.statusDescription = "CodeScene Delta Analysis passed"
-        }
-        $pullRequest.statusTargetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
-        #Update-PullRequestStatus -pullRequest $pullRequest -configuration $configuration
     }
     else {
         Write-Host "Not a pull request build!"
