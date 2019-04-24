@@ -19,15 +19,34 @@ function Get-AzureDevOpsAPIHeader {
     return $restApiHeader
 }
 
-function Update-PullRequestStatus {
+function Get-LatestPullRequestIteration {
+    param (
+        [Parameter(Mandatory=$true)]$pullRequest,
+        [Parameter(Mandatory=$true)]$configuration
+    )
+
+    $apiVersion = "5.0"
+    $apiUrl = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/git/repositories/$($pullRequest.repositoryId)/pullRequests/$($pullRequest.id)/iterations?includeCommits=true&api-version=$($apiVersion)"
+    $header = Get-AzureDevOpsAPIHeader
+    Write-VstsTaskVerbose "Fetching pull request iterations"
+    $response = Invoke-RestMethod -Uri $apiUrl -Method GET -Body $payload -Headers $header
+    $iterations = $response.value
+    $latestIterationId = 0
+    foreach ($iteration in $iterations.GetEnumerator()) {
+        if ($iteration.id -gt $latestIterationId) { $latestIterationId = $iteration.id }
+    }
+    return $latestIterationId
+}
+
+function Update-PullRequestIterationStatus {
     param (
         [Parameter(Mandatory=$true)]$pullRequest,
         [Parameter(Mandatory=$true)]$status,
         [Parameter(Mandatory=$true)]$configuration
     )
 
-    $statusApiVersion = "4.1-preview.1"
-    $statusApiUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/git/repositories/$($pullRequest.repositoryName)/pullRequests/$($pullRequest.id)/statuses?api-version=$($statusApiVersion)"
+    $statusApiVersion = "5.0-preview.1"
+    $statusApiUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/git/repositories/$($pullRequest.repositoryName)/pullRequests/$($pullRequest.id)/iterations/$($pullRequest.currentIterationId)/statuses?api-version=$($statusApiVersion)"
     $body = @{
         state = $status.Value.state
         description = $status.Value.description
@@ -41,8 +60,8 @@ function Update-PullRequestStatus {
     }
     $header = Get-AzureDevOpsAPIHeader
     $payload = $body | ConvertTo-Json
-    Write-VstsTaskVerbose "Updating pull request status"
-    $response = Invoke-RestMethod -Uri $statusApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header > $null
+    Write-VstsTaskVerbose "Updating pull request iteration status"
+    $response = Invoke-RestMethod -Uri $statusApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header
     return $response
 }
 
@@ -136,6 +155,7 @@ function Request-DeltaAnalysis {
     foreach ($commit in $pullRequest.commits) {
         $commitIds += $commit.commitId
     }
+    Write-VstsTaskVerbose "Commit Id(s):                      $($commitIds)"
     $deltaAnalysisApiUri = "$($configuration.codeSceneBaseUrl)/$($configuration.projectRESTEndpoint)"
     $credentialsPair = "$($configuration.codeSceneAPIUserName):$($configuration.codeSceneAPIPassword)"
     $basicToken = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($credentialsPair))
@@ -147,8 +167,8 @@ function Request-DeltaAnalysis {
         use_biomarkers = $rules.useBiomarkers.value
     }
     $payload = $body | ConvertTo-Json
-    Write-VstsTaskVerbose "Requesting CodeScene Delta Analysis"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Write-VstsTaskVerbose "Requesting CodeScene Delta Analysis"
     $response = Invoke-RestMethod -Uri $deltaAnalysisApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header
     # $response = Set-TestAnalysisResults -analysisResult $response # For testing only!
     return $response
@@ -201,6 +221,7 @@ try {
         Write-VstsTaskVerbose "Pull request id:                   $($pullRequest.id)"
 
         $pullRequest.commits = Get-PullRequestCommits -pullRequest $pullRequest -configuration $configuration
+        $pullRequest.currentIterationId = Get-LatestPullRequestIteration -pullRequest $pullRequest -configuration $configuration
         $analysisResult = Request-DeltaAnalysis -pullRequest $pullRequest -configuration $configuration -rules $rules
         $statuses = Set-Statuses -analysisResult $analysisResult -rules $rules -configuration $configuration
 
@@ -210,7 +231,7 @@ try {
             Write-VstsTaskVerbose "Status state:                      $($status.Value.state)"
             Write-VstsTaskVerbose "Status target url:                 $($status.Value.targetUrl)"
             if ($status.Value.publish) {
-                Update-PullRequestStatus -pullRequest $pullRequest -status $status -configuration $configuration
+                Update-PullRequestIterationStatus -pullRequest $pullRequest -status $status -configuration $configuration
             }
         }
     }
