@@ -12,8 +12,8 @@
   "demands": [],
   "version": {
     "Major": "0",
-    "Minor": "2",
-    "Patch": "0"
+    "Minor": "3",
+    "Patch": "3"
   },
   "minimumAgentVersion": "1.95.0",
   "groups": [
@@ -58,30 +58,30 @@
       "helpMarkDown": "Specifies the password of the user with access to the CodeScene REST API."
     },
     {
-        "name": "failOnHighRisk",
+        "name": "publishDeliveryRiskStatus",
         "type": "boolean",
-        "label": "Fail on high delivery risk level",
+        "label": "Publish delivery risk status",
         "defaultValue": "true",
         "required": true,
-        "helpMarkDown": "Specifies if the pull request status should fail when the delivery risk is above the set value",
+        "helpMarkDown": "Specifies if delivery risk should be included in the pull request status",
         "groupName": "rules"
     },
     {
-        "name": "failOnViolatedGoal",
+        "name": "publishPlannedGoalsStatus",
         "type": "boolean",
-        "label": "Fail on violated goal",
+        "label": "Publish planned goals status",
         "defaultValue": "true",
         "required": true,
-        "helpMarkDown": "Specifies if the pull request status should fail a goal is violated",
+        "helpMarkDown": "Specifies if planned goals should be included in the pull request status",
         "groupName": "rules"
     },
     {
-        "name": "failOnCodeHealthDecline",
+        "name": "publishCodeHealthStatus",
         "type": "boolean",
-        "label": "Fail on code health decline",
+        "label": "Publish code health status",
         "defaultValue": "true",
         "required": true,
-        "helpMarkDown": "Specifies if the pull request status should fail CodeScene detects a code healt declination",
+        "helpMarkDown": "Specifies if code health should be included in the pull request status",
         "groupName": "rules"
     },
     {
