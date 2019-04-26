@@ -86,7 +86,7 @@ function Get-RiskVerdict {
         [Parameter(Mandatory=$true)]$risk,
         [Parameter(Mandatory=$true)]$threshold
     )
-    if ($risk -gt $threshold)  { 
+    if ($risk -ge $threshold)  { 
         return $true
     }
     else {
