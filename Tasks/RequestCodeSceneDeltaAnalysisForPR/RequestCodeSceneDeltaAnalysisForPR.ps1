@@ -103,7 +103,7 @@ function Set-Statuses {
     $_statuses = @{
         risk = @{
             statusContextName = "delivery-risk"
-            description = "Delivery risk: $($analysisResult.result.risk)"
+            description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)"
             targetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
             publish = $rules.publishDeliveryRiskStatus
         }
