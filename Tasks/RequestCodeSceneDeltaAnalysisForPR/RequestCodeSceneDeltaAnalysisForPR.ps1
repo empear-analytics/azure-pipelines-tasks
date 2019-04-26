@@ -61,8 +61,7 @@ function Update-PullRequestIterationStatus {
     $header = Get-AzureDevOpsAPIHeader
     $payload = $body | ConvertTo-Json
     Write-VstsTaskVerbose "Updating pull request iteration status"
-    $response = Invoke-RestMethod -Uri $statusApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header
-    return $response
+    Invoke-RestMethod -Uri $statusApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header > $null
 }
 
 function Get-PullRequestCommits {
@@ -208,7 +207,7 @@ try {
     Write-VstsTaskVerbose "Repository name:                   $($pullRequest.repositoryName)"
     Write-VstsTaskVerbose "Source branch:                     $($pullRequest.sourceBranch)"
     Write-VstsTaskVerbose "Risk level threshold:              $($rules.riskLevelThreshold)"
-    Write-VstsTaskVerbose "Publish delivery risk statusl:     $($rules.publishDeliveryRiskStatus)"
+    Write-VstsTaskVerbose "Publish delivery risk status:      $($rules.publishDeliveryRiskStatus)"
     Write-VstsTaskVerbose "Publish planned goals status:      $($rules.publishPlannedGoalsStatus)"
     Write-VstsTaskVerbose "Publish code health status:        $($rules.publishCodeHealthStatus)"
     Write-VstsTaskVerbose "Coupling threshold:                $($rules.couplingThreshold)"
