@@ -100,7 +100,7 @@ function Set-Statuses {
         [Parameter(Mandatory=$true)]$rules
     )
 
-    $_statuses = @{
+    $statuses = @{
         risk = @{
             statusContextName = "delivery-risk"
             description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)"
@@ -120,28 +120,16 @@ function Set-Statuses {
             publish = $rules.publishCodeHealthStatus
         }
     }
-    $_statuses.risk.failed = Get-RiskVerdict -risk $analysisResult.result.risk -threshold $rules.riskLevelThreshold.value
-    $_statuses.goals.failed = [boolean]($analysisResult.result.'quality-gates'.'violates-goal')
-    $_statuses.codeHealth.failed = [boolean]($analysisResult.result.'quality-gates'.'degrades-in-code-health')
-    $_statuses.risk.state = $pullRequestStatusStates.Item($_statuses.risk.failed)
-    $_statuses.goals.state = $pullRequestStatusStates.Item($_statuses.goals.failed)
-    $_statuses.codeHealth.state = $pullRequestStatusStates.Item($_statuses.codeHealth.failed)
-    if ($_statuses.risk.failed) { $_statuses.risk.description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)" }
-    if ($_statuses.goals.failed) { $_statuses.goals.description = "Planned goals quality gate: Failed" }
-    if ($_statuses.codeHealth.failed) { $_statuses.codeHealth.description = "Code health quality gate: Failed" }
-    return $_statuses
-}
-
-function Set-TestAnalysisResults {
-    param (
-        [Parameter(Mandatory=$true)]$analysisResult
-    )
-
-    $analysisResult.result.risk = 2
-    $analysisResult.result.'quality-gates'.'degrades-in-code-health' = $true
-    $analysisResult.result.'quality-gates'.'violates-goal' = $true
-
-    return $analysisResult
+    $statuses.risk.failed = Get-RiskVerdict -risk $analysisResult.result.risk -threshold $rules.riskLevelThreshold.value
+    $statuses.goals.failed = [boolean]($analysisResult.result.'quality-gates'.'violates-goal')
+    $statuses.codeHealth.failed = [boolean]($analysisResult.result.'quality-gates'.'degrades-in-code-health')
+    $statuses.risk.state = $pullRequestStatusStates.Item($statuses.risk.failed)
+    $statuses.goals.state = $pullRequestStatusStates.Item($statuses.goals.failed)
+    $statuses.codeHealth.state = $pullRequestStatusStates.Item($statuses.codeHealth.failed)
+    if ($statuses.risk.failed) { $statuses.risk.description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)" }
+    if ($statuses.goals.failed) { $statuses.goals.description = "Planned goals quality gate: Failed" }
+    if ($statuses.codeHealth.failed) { $statuses.codeHealth.description = "Code health quality gate: Failed" }
+    return $statuses
 }
 
 function Request-DeltaAnalysis {
@@ -169,7 +157,6 @@ function Request-DeltaAnalysis {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Write-VstsTaskVerbose "Requesting CodeScene Delta Analysis"
     $response = Invoke-RestMethod -Uri $deltaAnalysisApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header
-    # $response = Set-TestAnalysisResults -analysisResult $response # For testing only!
     return $response
 }
 
