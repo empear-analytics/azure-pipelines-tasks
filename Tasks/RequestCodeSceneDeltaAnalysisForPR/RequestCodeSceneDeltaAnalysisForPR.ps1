@@ -126,9 +126,13 @@ function Set-Statuses {
     $statuses.risk.state = $pullRequestStatusStates.Item($statuses.risk.failed)
     $statuses.goals.state = $pullRequestStatusStates.Item($statuses.goals.failed)
     $statuses.codeHealth.state = $pullRequestStatusStates.Item($statuses.codeHealth.failed)
+    $statusWarnings = @{}
+    foreach ($warning in $analysisResult.result.warnings) {
+        $statusWarnings."$($warning.category)" = $warning.details
+    }
     if ($statuses.risk.failed) { $statuses.risk.description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)" }
-    if ($statuses.goals.failed) { $statuses.goals.description = "Planned goals quality gate: Failed" }
-    if ($statuses.codeHealth.failed) { $statuses.codeHealth.description = "Code health quality gate: Failed" }
+    if ($statuses.goals.failed) { $statuses.goals.description = "Planned goals quality gate: Failed - $($statusWarnings.'Violates Goals')" }
+    if ($statuses.codeHealth.failed) { $statuses.codeHealth.description = "Code health quality gate: Failed - $($statusWarnings.'Degrades in Code Health')" }
     return $statuses
 }
 
