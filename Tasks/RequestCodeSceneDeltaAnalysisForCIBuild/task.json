@@ -61,30 +61,30 @@
       "helpMarkDown": "Specifies the password of the user with access to the CodeScene REST API."
     },
     {
-        "name": "publishDeliveryRiskStatus",
+        "name": "failTestCaseOnDeliveryRiskFail",
         "type": "boolean",
-        "label": "Publish delivery risk status",
+        "label": "Fail test case based on delivery risk status",
         "defaultValue": "true",
         "required": true,
-        "helpMarkDown": "Specifies if delivery risk should be included in the pull request status",
+        "helpMarkDown": "Specifies if the delivery risk test case should fail on gate failure",
         "groupName": "rules"
     },
     {
-        "name": "publishPlannedGoalsStatus",
+        "name": "failTestCasePlannedGoalsFail",
         "type": "boolean",
-        "label": "Publish planned goals status",
+        "label": "Fail test case based on planned goals status",
         "defaultValue": "true",
         "required": true,
-        "helpMarkDown": "Specifies if planned goals should be included in the pull request status",
+        "helpMarkDown": "Specifies if the planned goals test case should fail on gate failure",
         "groupName": "rules"
     },
     {
-        "name": "publishCodeHealthStatus",
+        "name": "failTestCaseCodeHealthFail",
         "type": "boolean",
-        "label": "Publish code health status",
+        "label": "Fail test case based on code health status",
         "defaultValue": "true",
         "required": true,
-        "helpMarkDown": "Specifies if code health should be included in the pull request status",
+        "helpMarkDown": "Specifies if the code health test case should fail on gate failure",
         "groupName": "rules"
     },
     {

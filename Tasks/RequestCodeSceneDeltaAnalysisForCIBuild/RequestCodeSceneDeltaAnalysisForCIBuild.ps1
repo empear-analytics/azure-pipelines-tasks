@@ -1,6 +1,53 @@
 [CmdletBinding()]
 param()
 
+function New-Rules {
+    $rules = @{}
+
+    $rules.useBiomarkers = @{ value = $true }
+    $rules.riskLevelThreshold = @{ value = Get-VstsInput -Name riskLevelThreshold -AsInt }
+    $rules.couplingThreshold = @{ value = Get-VstsInput -Name couplingThreshold -AsInt }
+    $rules.failTestCaseOnDeliveryRiskFail = Get-VstsInput -Name failTestCaseOnDeliveryRiskFail -AsBool
+    $rules.failTestCasePlannedGoalsFail = Get-VstsInput -Name failTestCasePlannedGoalsFail -AsBool
+    $rules.failTestCaseCodeHealthFail = Get-VstsInput -Name failTestCaseCodeHealthFail -AsBool
+
+    return $rules
+}
+
+function New-Configuration {
+    $configuration = @{}
+
+    $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
+    $configuration.codeSceneBaseUrl = Get-VstsInput -Name codeSceneBaseUrl
+    $configuration.projectRESTEndpoint = Get-VstsInput -Name projectRESTEndpoint
+    $configuration.codeSceneAPIUserName = Get-VstsInput -Name codeSceneAPIUserName
+    $configuration.codeSceneAPIPassword = Get-VstsInput -Name codeSceneAPIPassword
+    $configuration.taskDefinitionsUri = $env:SYSTEM_TASKDEFINITIONSURI
+    $configuration.teamFoundationServerUri = $env:SYSTEM_TEAMFOUNDATIONSERVERURI
+    $configuration.teamProject = $env:SYSTEM_TEAMPROJECT
+    $configuration.pipelineContext = Get-Pipeline-Context
+
+    return $configuration
+}
+
+function New-Context {
+    $context = @{}
+    
+    $context.repositoryName = $env:BUILD_REPOSITORY_NAME
+    $context.repositoryId = $env:BUILD_REPOSITORY_ID
+    $context.sourceBranch = $env:BUILD_SOURCEBRANCH
+    $context.buildId = $env:BUILD_BUILDID
+    $context.buildDefinitionId = $env:BUILD_DEFINITIONID
+    $context.buildDefinitionName = $env:BUILD_DEFINITIONNAME
+    $context.releaseId = $env:RELEASE_RELEASEID
+    $context.releaseDefinitionId = $env:RELEASE_DEFINITIONID
+    $context.releaseDefinitionName = $env:RELEASE_DEFINITIONNAME
+    $context.environmentName = $env:RELEASE_ENVIRONMENTNAME
+    $context.releaseUri = $env:RELEASE_RELEASEURI
+    $context.environmentUri = $env:RELEASE_ENVIRONMENTURI
+
+    return $context
+}
 function Get-Pipeline-Context {
     if(![string]::IsNullOrEmpty($env:BUILD_SOURCESDIRECTORY))
     {
@@ -79,7 +126,7 @@ function Get-PreviousEnvironmentRelease {
         }
         if ($found) {
             Write-VstsTaskVerbose "Found previous deployment in release $($release.id)"
-            return $release.id
+            return $release
         }
     }
 }
@@ -98,9 +145,9 @@ function Get-EnvironmentCommits {
     return $response.value
 }
 
-function Get-ChangeCommits {
+function Get-Commits {
     param (
-        [Parameter(Mandatory=$true)]$change,
+        [Parameter(Mandatory=$true)]$context,
         [Parameter(Mandatory=$true)]$configuration
     )
     switch ($configuration.pipelineContext) {
@@ -108,15 +155,14 @@ function Get-ChangeCommits {
             $header = Get-AzureDevOpsAPIHeader
             $buildApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/build/"
             $buildApiVersion = "5.0"
-            $requestUri = "$($buildApiBaseUri)builds/$($change.buildId)/changes?api-version=$($buildApiVersion)"
+            $requestUri = "$($buildApiBaseUri)builds/$($context.buildId)/changes?api-version=$($buildApiVersion)"
             $response = Invoke-RestMethod -Uri $requestUri -Method GET -Headers $header
             $commits = $response.value
         }
         "release" {
-            $releases = Get-Releases -releaseDefinitionId $change.releaseDefinitionId -configuration $configuration
-            $previousReleaseId = Get-PreviousEnvironmentRelease -releases $releases -environmentName $change.environmentName -currentReleaseId $change.releaseId -configuration $configuration
-            $commits = Get-EnvironmentCommits -currentReleaseId $change.releaseId -previousReleaseId $previousReleaseId -configuration $configuration
-            Write-Host $previousReleaseId | ConvertTo-Json -Depth 10
+            $releases = Get-Releases -releaseDefinitionId $context.releaseDefinitionId -configuration $configuration
+            $previousRelease = Get-PreviousEnvironmentRelease -releases $releases -environmentName $context.environmentName -currentReleaseId $context.releaseId -configuration $configuration
+            $commits = Get-EnvironmentCommits -currentReleaseId $context.releaseId -previousReleaseId $previousRelease.id -configuration $configuration
         }
         Default {}
     }
@@ -136,57 +182,14 @@ function Get-RiskVerdict {
     }
 }
 
-function Set-Statuses {
-    param (
-        [Parameter(Mandatory=$true)]$analysisResult,
-        [Parameter(Mandatory=$true)]$configuration,
-        [Parameter(Mandatory=$true)]$rules
-    )
-
-    $statuses = @{
-        risk = @{
-            statusContextName = "delivery-risk"
-            description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)"
-            targetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
-            publish = $rules.publishDeliveryRiskStatus
-        }
-        goals = @{
-            statusContextName = "planned-goals"
-            description = "Planned goals"
-            targetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
-            publish = $rules.publishPlannedGoalsStatus
-        }
-        codeHealth = @{
-            statusContextName = "code-health"
-            description = "Code health"
-            targetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
-            publish = $rules.publishCodeHealthStatus
-        }
-    }
-    $statuses.risk.failed = Get-RiskVerdict -risk $analysisResult.result.risk -threshold $rules.riskLevelThreshold.value
-    $statuses.goals.failed = [boolean]($analysisResult.result.'quality-gates'.'violates-goal')
-    $statuses.codeHealth.failed = [boolean]($analysisResult.result.'quality-gates'.'degrades-in-code-health')
-    $statuses.risk.state = $changeStatusStates.Item($statuses.risk.failed)
-    $statuses.goals.state = $changeStatusStates.Item($statuses.goals.failed)
-    $statuses.codeHealth.state = $changeStatusStates.Item($statuses.codeHealth.failed)
-    $statusWarnings = @{}
-    foreach ($warning in $analysisResult.result.warnings) {
-        $statusWarnings."$($warning.category)" = $warning.details
-    }
-    if ($statuses.risk.failed) { $statuses.risk.description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)" }
-    if ($statuses.goals.failed) { $statuses.goals.description = "Planned goals quality gate: Failed - $($statusWarnings.'Violates Goals')" }
-    if ($statuses.codeHealth.failed) { $statuses.codeHealth.description = "Code health quality gate: Failed - $($statusWarnings.'Degrades in Code Health')" }
-    return $statuses
-}
-
 function Request-DeltaAnalysis {
     param (
-        [Parameter(Mandatory=$true)]$change,
+        [Parameter(Mandatory=$true)]$context,
         [Parameter(Mandatory=$true)]$configuration,
         [Parameter(Mandatory=$true)]$rules
     )
     $commitIds = @()
-    foreach ($commit in $change.commits) {
+    foreach ($commit in $context.commits) {
         $commitIds += $commit.id
     }
     Write-VstsTaskVerbose "Commit Id(s):                      $($commitIds)"
@@ -196,104 +199,169 @@ function Request-DeltaAnalysis {
     $header = @{ Authorization = "Basic $($basicToken)" }
     $body = @{
         commits = $commitIds
-        repository = $change.repositoryName
+        repository = $context.repositoryName
         coupling_threshold_percent = $rules.couplingThreshold.value
         use_biomarkers = $rules.useBiomarkers.value
     }
     $payload = $body | ConvertTo-Json
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Write-VstsTaskVerbose "Requesting CodeScene Delta Analysis"
-    $response = Invoke-RestMethod -Uri $deltaAnalysisApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header
-    $responseJsonString = $response | ConvertTo-Json -Depth 10
+    $response = Invoke-RestMethod -Uri $deltaAnalysisApiUri -Method POST -Body $payload -ContentType "application/json" -Headers $header
     return $response
 }
 
-$changeStatusStates = @{
+function New-VSTestRun {
+    param (
+        [Parameter(Mandatory=$true)]$configuration,
+        [Parameter(Mandatory=$true)]$context,
+        [Parameter(Mandatory=$true)]$timer
+    )
+    $testRun = @{
+        state = "InProgress"
+        automated = $true
+        errorMessage = ""
+        build = @{
+            id = $context.buildId
+        }
+        startDate = $timer.analysisRunStarted
+    }
+    switch ($configuration.pipelineContext) {
+        "build" {
+            $testRun.name = "CodeScene Delta Analysis $($context.buildDefinitionName)"
+        }
+        "release" {
+            $testRun.name = "CodeScene Delta Analysis $($context.releaseDefinitionName)"
+            $testRun.releaseUri = $context.releaseUri
+            $testRun.releaseEnvironmentUri = $context.environmentUri
+        }
+        Default {}
+    }
+    $header = Get-AzureDevOpsAPIHeader
+    $testApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/test/"
+    $testApiVersion = "5.0"
+    $requestUri = "$($testApiBaseUri)runs?api-version=$($testApiVersion)"
+    $body = $testRun | ConvertTo-Json
+    return Invoke-RestMethod -Uri $requestUri -Method POST -Body $body -ContentType "application/json" -Headers $header
+}
+
+function Complete-VSTestRun {
+    param (
+        [Parameter(Mandatory=$true)]$configuration,
+        [Parameter(Mandatory=$true)]$testRunId,
+        [Parameter(Mandatory=$true)]$context,
+        [Parameter(Mandatory=$true)]$timer
+    )
+    $testRun = @{
+        state = "Completed"
+        completedDate = $timer.analysisRunCompleted
+    }
+    $header = Get-AzureDevOpsAPIHeader
+    $testApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/test/"
+    $testApiVersion = "5.0"
+    $requestUri = "$($testApiBaseUri)runs/$($testRunId)?api-version=$($testApiVersion)"
+    $body = $testRun | ConvertTo-Json
+    Invoke-RestMethod -Uri $requestUri -Method PATCH -Body $body -ContentType "application/json" -Headers $header > $null
+}
+
+function Add-VSTestResults {
+    param (
+        [Parameter(Mandatory=$true)]$analysisResult,
+        [Parameter(Mandatory=$true)]$configuration,
+        [Parameter(Mandatory=$true)]$testRunId,
+        [Parameter(Mandatory=$true)]$rules,
+        [Parameter(Mandatory=$true)]$context
+    )
+    $resultsWarnings = @{}
+    foreach ($warning in $analysisResult.result.warnings) {
+        $resultsWarnings."$($warning.category)" = $warning.details
+    }
+    $deliveryRiskFailed = Get-RiskVerdict -risk $analysisResult.result.risk -threshold $rules.riskLevelThreshold.value
+    $deliveryRiskOutcome = $testResultOutcomes.Item($deliveryRiskFailed)
+    switch ($configuration.pipelineContext) {
+        "build" { $testNamePostFix = $context.buildDefinitionId }
+        "release" { $testNamePostFix = $context.releaseDefinitionId }
+        Default {}
+    }
+    $testResults = @(
+        @{
+            testCaseTitle = "Delivery Risk"
+            errorMessage = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)"
+            outcome = $deliveryRiskOutcome
+            automatedTestName = "CodeScene.DeltaAnalysis.DeliveryRisk.$($testNamePostFix)"
+            state = "Completed"
+            computerName = "CodeScene Delta Analysis"
+            automatedTestType = "UnitTest"
+            owner = @{
+                displayName = "CodeScene"
+            }
+        },
+        @{
+            testCaseTitle = "Planned Goals"
+            errorMessage = "$($resultsWarnings.'Violates Goals')"
+            outcome = $testResultOutcomes.Item([boolean]($analysisResult.result.'quality-gates'.'violates-goal'))
+            automatedTestName = "CodeScene.DeltaAnalysis.PlannedGoals.$($testNamePostFix)"
+            state = "Completed"
+            computerName = "CodeScene Delta Analysis"
+            automatedTestType = "UnitTest"
+            owner = @{
+                displayName = "CodeScene"
+            }
+        },
+        @{
+            testCaseTitle = "Code Health"
+            errorMessage = "$($resultsWarnings.'Degrades in Code Health')"
+            outcome = $testResultOutcomes.Item([boolean]($analysisResult.result.'quality-gates'.'degrades-in-code-health'))
+            automatedTestName = "CodeScene.DeltaAnalysis.CodeHealth$($testNamePostFix)"
+            state = "Completed"
+            computerName = "CodeScene Delta Analysis"
+            automatedTestType = "UnitTest"
+            owner = @{
+                displayName = "CodeScene"
+            }
+        }
+    )
+    $header = Get-AzureDevOpsAPIHeader
+    $testApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/test/"
+    $testApiVersion = "5.0"
+    $requestUri = "$($testApiBaseUri)runs/$($testRunId)/results?api-version=$($testApiVersion)"
+    $body = $testResults | ConvertTo-Json
+    Invoke-RestMethod -Uri $requestUri -Method POST -Body $body -ContentType "application/json" -Headers $header > $null
+}
+
+function Publish-AnalysisResults {
+
+}
+
+$testResultOutcomes = @{
     $true = "failed"
-    $false = "succeeded"
+    $false = "passed"
 }
 
 Trace-VstsEnteringInvocation $MyInvocation
 try {
-    import-module "Microsoft.TeamFoundation.DistributedTask.Task.TestResults"
-    $change = @{}
-    $rules = @{}
-    $configuration = @{}
+    $rules = New-Rules
+    $configuration = New-Configuration
+    $context = New-Context
 
-    $rules.useBiomarkers = @{ value = $true }
-    $rules.riskLevelThreshold = @{ value = Get-VstsInput -Name riskLevelThreshold -AsInt }
-    $rules.couplingThreshold = @{ value = Get-VstsInput -Name couplingThreshold -AsInt }
-    $rules.publishDeliveryRiskStatus = Get-VstsInput -Name publishDeliveryRiskStatus -AsBool
-    $rules.publishPlannedGoalsStatus = Get-VstsInput -Name publishPlannedGoalsStatus -AsBool
-    $rules.publishCodeHealthStatus = Get-VstsInput -Name publishCodeHealthStatus -AsBool
+    $timer = @{}
 
-    $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
-    $configuration.codeSceneBaseUrl = Get-VstsInput -Name codeSceneBaseUrl
-    $configuration.projectRESTEndpoint = Get-VstsInput -Name projectRESTEndpoint
-    $configuration.codeSceneAPIUserName = Get-VstsInput -Name codeSceneAPIUserName
-    $configuration.codeSceneAPIPassword = Get-VstsInput -Name codeSceneAPIPassword
-    $configuration.taskDefinitionsUri = $env:SYSTEM_TASKDEFINITIONSURI
-    $configuration.teamFoundationServerUri = $env:SYSTEM_TEAMFOUNDATIONSERVERURI
-    $configuration.teamProject = $env:SYSTEM_TEAMPROJECT
-    $configuration.pipelineContext = Get-Pipeline-Context
-    
-    $change.repositoryName = $env:BUILD_REPOSITORY_NAME
-    $change.repositoryId = $env:BUILD_REPOSITORY_ID
-    $change.sourceBranch = $env:BUILD_SOURCEBRANCH
-    $change.buildId = $env:BUILD_BUILDID
-    $change.releaseId = $env:RELEASE_RELEASEID
-    $change.releaseDefinitionId = $env:RELEASE_DEFINITIONID
-    $change.environmentName = $env:RELEASE_ENVIRONMENTNAME
-
-    Write-VstsTaskVerbose "Repository name:                   $($change.repositoryName)"
-    Write-VstsTaskVerbose "Source branch:                     $($change.sourceBranch)"
+    Write-VstsTaskVerbose "Repository name:                   $($context.repositoryName)"
+    Write-VstsTaskVerbose "Source branch:                     $($context.sourceBranch)"
     Write-VstsTaskVerbose "Risk level threshold:              $($rules.riskLevelThreshold)"
-    Write-VstsTaskVerbose "Publish delivery risk status:      $($rules.publishDeliveryRiskStatus)"
-    Write-VstsTaskVerbose "Publish planned goals status:      $($rules.publishPlannedGoalsStatus)"
-    Write-VstsTaskVerbose "Publish code health status:        $($rules.publishCodeHealthStatus)"
+    Write-VstsTaskVerbose "Fail on delivery risk:             $($rules.failTestCaseOnDeliveryRiskFail)"
+    Write-VstsTaskVerbose "Fail on planned goals:             $($rules.failTestCasePlannedGoalsFail)"
+    Write-VstsTaskVerbose "Fail on code health:               $($rules.failTestCaseCodeHealthFail)"
     Write-VstsTaskVerbose "Coupling threshold:                $($rules.couplingThreshold)"
     Write-VstsTaskVerbose "Task definitions uri:              $($configuration.taskDefinitionsUri)"
     Write-VstsTaskVerbose "Team project:                      $($configuration.teamProject)"
 
-    $change.commits = Get-ChangeCommits -change $change -configuration $configuration
-    $analysisResult = Request-DeltaAnalysis -change $change -configuration $configuration -rules $rules
-    
-    $statuses = Set-Statuses -analysisResult $analysisResult -rules $rules -configuration $configuration
-
-    foreach($status in $statuses.GetEnumerator()) {
-        Write-VstsTaskVerbose "Status context name:               $($status.Value.statusContextName)"
-        Write-VstsTaskVerbose "Status description:                $($status.Value.description)"
-        Write-VstsTaskVerbose "Status state:                      $($status.Value.state)"
-        Write-VstsTaskVerbose "Status target url:                 $($status.Value.targetUrl)"
-        if ($status.Value.publish) {
-            Write-Host ($status | ConvertTo-Json)
-        }
-    }
-
-
-    # if ($change.sourceBranch -like "*pull*") {
-    #     $change.id = (($change.sourceBranch).Replace("refs/pull/","")).replace("/merge","")
-
-    #     Write-VstsTaskVerbose "Pull request id:                   $($change.id)"
-
-    #     $change.commits = Get-changeCommits -change $change -configuration $configuration
-    #     $change.currentIterationId = Get-LatestchangeIteration -change $change -configuration $configuration
-    #     $analysisResult = Request-DeltaAnalysis -change $change -configuration $configuration -rules $rules
-    #     $statuses = Set-Statuses -analysisResult $analysisResult -rules $rules -configuration $configuration
-
-    #     foreach($status in $statuses.GetEnumerator()) {
-    #         Write-VstsTaskVerbose "Status context name:               $($status.Value.statusContextName)"
-    #         Write-VstsTaskVerbose "Status description:                $($status.Value.description)"
-    #         Write-VstsTaskVerbose "Status state:                      $($status.Value.state)"
-    #         Write-VstsTaskVerbose "Status target url:                 $($status.Value.targetUrl)"
-    #         if ($status.Value.publish) {
-    #             Update-changeIterationStatus -change $change -status $status -configuration $configuration
-    #         }
-    #     }
-    # }
-    # else {
-    #     Write-Host "Not a pull request build!"
-    # }
+    $context.commits = Get-Commits -context $context -configuration $configuration
+    $timer.analysisRunStarted = [Xml.XmlConvert]::ToString((get-date),[Xml.XmlDateTimeSerializationMode]::Utc)
+    $testRun = New-VSTestRun -configuration $configuration -context $context -timer $timer
+    $analysisResult = Request-DeltaAnalysis -context $context -configuration $configuration -rules $rules
+    $timer.analysisRunCompleted = [Xml.XmlConvert]::ToString((get-date),[Xml.XmlDateTimeSerializationMode]::Utc)
+    Add-VSTestResults -analysisResult $analysisResult -rules $rules -configuration $configuration -testRunId $testRun.id -context $context
+    Complete-VSTestRun -configuration $configuration -context $context -timer $timer -testRunId $testRun.id
 } finally {
     Trace-VstsLeavingInvocation $MyInvocation
 }
