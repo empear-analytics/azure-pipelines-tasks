@@ -227,10 +227,10 @@ function New-VSTestRun {
     }
     switch ($configuration.pipelineContext) {
         "build" {
-            $testRun.name = "CodeScene Delta Analysis $($context.buildDefinitionName)"
+            $testRun.name = "CodeScene Delta Analysis - $($context.buildDefinitionName)"
         }
         "release" {
-            $testRun.name = "CodeScene Delta Analysis $($context.releaseDefinitionName)"
+            $testRun.name = "CodeScene Delta Analysis - $($context.releaseDefinitionName)"
             $testRun.releaseUri = $context.releaseUri
             $testRun.releaseEnvironmentUri = $context.environmentUri
         }
