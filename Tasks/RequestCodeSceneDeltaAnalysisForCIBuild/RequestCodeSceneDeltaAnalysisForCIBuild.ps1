@@ -26,6 +26,7 @@ function New-Configuration {
     $configuration.teamFoundationServerUri = $env:SYSTEM_TEAMFOUNDATIONSERVERURI
     $configuration.teamProject = $env:SYSTEM_TEAMPROJECT
     $configuration.pipelineContext = Get-Pipeline-Context
+    $configuration.azureDevOpsAuthHeader = Get-AzureDevOpsAuthHeader
 
     return $configuration
 }
@@ -61,22 +62,22 @@ function Get-Pipeline-Context {
     }
 }
 
-function Get-AzureDevOpsAPIHeader {
+function Get-AzureDevOpsAuthHeader {
     if (!([string]::IsNullOrEmpty($configuration.azureDevOpsAPItoken))) {
-        Write-VstsTaskVerbose "Using provided Personal Access Token..."
+        Write-VstsTaskVerbose "Using provided Personal Access Token."
         # Base64-encodes the Personal Access Token (PAT) appropriately
         $user = ""
         $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user,$configuration.azureDevOpsAPItoken)))
-        $restApiHeader = @{Authorization=("Basic {0}" -f $base64AuthInfo)}
+        $authHeader = @{Authorization=("Basic {0}" -f $base64AuthInfo)}
     }
     elseif (!([string]::IsNullOrEmpty($env:SYSTEM_ACCESSTOKEN))) {
-        Write-VstsTaskVerbose "Using shared VSTS OAuth token $($env:SYSTEM_ACCESSTOKEN)..."
-        $restApiHeader = @{Authorization = "Bearer $env:SYSTEM_ACCESSTOKEN"}
+        Write-VstsTaskVerbose "Using shared VSTS OAuth token."
+        $authHeader = @{Authorization = "Bearer $env:SYSTEM_ACCESSTOKEN"}
     }
     else {
         Write-Error "No token provided! Either provide Personal Access Token or enable Allow scripts to access OAuth token in your environment settings."
     }
-    return $restApiHeader
+    return $authHeader
 }
 
 function Get-Releases {
@@ -84,13 +85,13 @@ function Get-Releases {
         [Parameter(Mandatory=$true)]$releaseDefinitionId,
         [Parameter(Mandatory=$true)]$configuration
     )
-    $header = Get-AzureDevOpsAPIHeader
     $releaseApiBaseUri = "$($configuration.teamFoundationServerUri)DefaultCollection/$($configuration.teamProject)/_apis/release/"
     $releaseApiVersion = "5.0"
     $requestUri = "$($releaseApiBaseUri)releases?definitionId=$($releaseDefinitionId)&api-version=$($releaseApiVersion)"
-    $response = Invoke-RestMethod -Uri $requestUri -Method Get -ContentType "application/json" -Headers $header
+    Write-VstsTaskVerbose "Looking for releases in the current release definition..."
+    $response = Invoke-RestMethod -Uri $requestUri -Method Get -ContentType "application/json" -Headers $configuration.azureDevOpsAuthHeader
     $releases = $response.value
-    Write-VstsTaskVerbose "Found $($releases.Count) releases for the given release definition."
+    Write-VstsTaskVerbose "Found $($releases.Count) releases for the given current definition."
     return $releases
 }
 
@@ -101,19 +102,18 @@ function Get-PreviousEnvironmentRelease {
         [Parameter(Mandatory=$true)]$environmentName,
         [Parameter(Mandatory=$true)]$configuration
     )
-    $header = Get-AzureDevOpsAPIHeader
+    Write-VstsTaskVerbose "Looking for the latest deployment to $environmentName..."
     $releaseApiBaseUri = "$($configuration.teamFoundationServerUri)DefaultCollection/$($configuration.teamProject)/_apis/release/"
     $releaseApiVersion = "5.0"
     # Look through all releases for the latest one deployed to the given environment
-    Write-VstsTaskVerbose "Looking for latest deployment to $environmentName..."
     foreach ($release in $releases) {
         Write-VstsTaskVerbose "Looking into release with ID $($release.id)..."
         if ([int]($release.id) -ge [int]$currentReleaseId) {
-            Write-Host "Skipping current or newer release."
+            Write-VstsTaskVerbose "Skipping current or newer release."
             continue
         }
         $requestUri = "$($releaseApiBaseUri)/releases/$($release.id)?api-version=$($releaseApiVersion)"
-        $response = Invoke-RestMethod -Uri $requestUri -Method Get -ContentType "application/json" -Headers $header
+        $response = Invoke-RestMethod -Uri $requestUri -Method Get -ContentType "application/json" -Headers $configuration.azureDevOpsAuthHeader
         $environments = $response.environments
         $found = $false
         Write-VstsTaskVerbose "Looking into each environment..."
@@ -137,11 +137,10 @@ function Get-EnvironmentCommits {
         [Parameter(Mandatory=$true)]$previousReleaseId,
         [Parameter(Mandatory=$true)]$configuration
     )
-    $header = Get-AzureDevOpsAPIHeader
     $releaseApiBaseUri = "$($configuration.teamFoundationServerUri)DefaultCollection/$($configuration.teamProject)/_apis/release/"
     $releaseApiVersion = "5.0-preview"
     $requestUri = "$($releaseApiBaseUri)/releases/$($currentReleaseId)/changes?baseReleaseId=$previousReleaseId&api-version=$($releaseApiVersion)"
-    $response = Invoke-RestMethod -Uri $requestUri -Method Get -ContentType "application/json" -Headers $header
+    $response = Invoke-RestMethod -Uri $requestUri -Method Get -ContentType "application/json" -Headers $configuration.azureDevOpsAuthHeader
     return $response.value
 }
 
@@ -150,22 +149,25 @@ function Get-Commits {
         [Parameter(Mandatory=$true)]$context,
         [Parameter(Mandatory=$true)]$configuration
     )
+    Write-Host "Gathering commits..."
     switch ($configuration.pipelineContext) {
         "build" {
-            $header = Get-AzureDevOpsAPIHeader
+            Write-VstsTaskVerbose "Getting commits for build $($context.buildId)"
             $buildApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/build/"
             $buildApiVersion = "5.0"
             $requestUri = "$($buildApiBaseUri)builds/$($context.buildId)/changes?api-version=$($buildApiVersion)"
-            $response = Invoke-RestMethod -Uri $requestUri -Method GET -Headers $header
+            $response = Invoke-RestMethod -Uri $requestUri -Method GET -Headers $configuration.azureDevOpsAuthHeader
             $commits = $response.value
         }
         "release" {
+            Write-VstsTaskVerbose "Getting commits for release $($context.releaseId)"
             $releases = Get-Releases -releaseDefinitionId $context.releaseDefinitionId -configuration $configuration
             $previousRelease = Get-PreviousEnvironmentRelease -releases $releases -environmentName $context.environmentName -currentReleaseId $context.releaseId -configuration $configuration
             $commits = Get-EnvironmentCommits -currentReleaseId $context.releaseId -previousReleaseId $previousRelease.id -configuration $configuration
         }
         Default {}
     }
+    Write-VstsTaskVerbose "Found $($commits.Count) commits."
     return $commits
 }
 
@@ -182,6 +184,17 @@ function Get-RiskVerdict {
     }
 }
 
+function ConvertTo-Hashtable {
+    param (
+        [Parameter(Mandatory=$true)]$object
+    )
+    $hashTable = @{}
+    foreach ($element in $object) {
+        $hashTable."$($element.category)" = $element.details
+    }
+    return $hashTable
+}
+
 function Request-DeltaAnalysis {
     param (
         [Parameter(Mandatory=$true)]$context,
@@ -192,8 +205,11 @@ function Request-DeltaAnalysis {
     foreach ($commit in $context.commits) {
         $commitIds += $commit.id
     }
-    Write-VstsTaskVerbose "Commit Id(s):                      $($commitIds)"
+    Write-Host "Requesting CodeScene Delta Analysis..."
+    Write-VstsTaskVerbose "Commit Id(s): $($commitIds)"
     $deltaAnalysisApiUri = "$($configuration.codeSceneBaseUrl)/$($configuration.projectRESTEndpoint)"
+    # ========= NB! For testing purposes only! Remove before completing PR! =========
+    $deltaAnalysisApiUri = "https://stsingaporeinternaltest.azurewebsites.net/api/CodeSceneDeltaAnalysisMock"
     $credentialsPair = "$($configuration.codeSceneAPIUserName):$($configuration.codeSceneAPIPassword)"
     $basicToken = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($credentialsPair))
     $header = @{ Authorization = "Basic $($basicToken)" }
@@ -205,8 +221,12 @@ function Request-DeltaAnalysis {
     }
     $payload = $body | ConvertTo-Json
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Write-VstsTaskVerbose "Requesting CodeScene Delta Analysis"
     $response = Invoke-RestMethod -Uri $deltaAnalysisApiUri -Method POST -Body $payload -ContentType "application/json" -Headers $header
+    $response.result.warnings = ConvertTo-Hashtable -object $response.result.warnings
+    Write-Host "CodeScene DeltaAnalysis Done."
+    Write-VstsTaskVerbose "Delivery risk: $($response.result.risk) - $($response.result.description)"
+    Write-VstsTaskVerbose "Planned Goals: $($testResultOutcomes.Item([boolean]($response.result.'quality-gates'.'violates-goal')))"
+    Write-VstsTaskVerbose "Code Health: $($testResultOutcomes.Item([boolean]($response.result.'quality-gates'.'degrades-in-code-health')))"
     return $response
 }
 
@@ -216,32 +236,34 @@ function New-VSTestRun {
         [Parameter(Mandatory=$true)]$context,
         [Parameter(Mandatory=$true)]$timer
     )
-    $testRun = @{
+    Write-VstsTaskVerbose "Starting a new test run..."
+    $testRunData = @{
         state = "InProgress"
         automated = $true
         errorMessage = ""
         build = @{
             id = $context.buildId
         }
-        startDate = $timer.analysisRunStarted
+        startDate = [Xml.XmlConvert]::ToString(($timer.analysisRunStarted),[Xml.XmlDateTimeSerializationMode]::Utc)
     }
     switch ($configuration.pipelineContext) {
         "build" {
-            $testRun.name = "CodeScene Delta Analysis - $($context.buildDefinitionName)"
+            $testRunData.name = "CodeScene Delta Analysis - $($context.buildDefinitionName)"
         }
         "release" {
-            $testRun.name = "CodeScene Delta Analysis - $($context.releaseDefinitionName)"
-            $testRun.releaseUri = $context.releaseUri
-            $testRun.releaseEnvironmentUri = $context.environmentUri
+            $testRunData.name = "CodeScene Delta Analysis - $($context.releaseDefinitionName)"
+            $testRunData.releaseUri = $context.releaseUri
+            $testRunData.releaseEnvironmentUri = $context.environmentUri
         }
         Default {}
     }
-    $header = Get-AzureDevOpsAPIHeader
     $testApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/test/"
     $testApiVersion = "5.0"
     $requestUri = "$($testApiBaseUri)runs?api-version=$($testApiVersion)"
-    $body = $testRun | ConvertTo-Json
-    return Invoke-RestMethod -Uri $requestUri -Method POST -Body $body -ContentType "application/json" -Headers $header
+    $body = $testRunData | ConvertTo-Json
+    $testRun = Invoke-RestMethod -Uri $requestUri -Method POST -Body $body -ContentType "application/json" -Headers $configuration.azureDevOpsAuthHeader
+    Write-VstsTaskVerbose "Test run with id $($testRun.id) started."
+    return $testRun
 }
 
 function Complete-VSTestRun {
@@ -251,16 +273,31 @@ function Complete-VSTestRun {
         [Parameter(Mandatory=$true)]$context,
         [Parameter(Mandatory=$true)]$timer
     )
-    $testRun = @{
+    Write-VstsTaskVerbose "Completing test run..."
+    $report = New-PlainTextAnalysisReport -context $context -analysisResult $analysisResult -timer $timer
+    $testRunData = @{
         state = "Completed"
-        completedDate = $timer.analysisRunCompleted
+        completedDate = [Xml.XmlConvert]::ToString(($timer.analysisRunCompleted),[Xml.XmlDateTimeSerializationMode]::Utc)
+        errorMessage = $report.short
     }
-    $header = Get-AzureDevOpsAPIHeader
     $testApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/test/"
     $testApiVersion = "5.0"
     $requestUri = "$($testApiBaseUri)runs/$($testRunId)?api-version=$($testApiVersion)"
-    $body = $testRun | ConvertTo-Json
-    Invoke-RestMethod -Uri $requestUri -Method PATCH -Body $body -ContentType "application/json" -Headers $header > $null
+    $body = $testRunData | ConvertTo-Json
+    Invoke-RestMethod -Uri $requestUri -Method PATCH -Body $body -ContentType "application/json" -Headers $configuration.azureDevOpsAuthHeader > $null
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($report.full)
+    $encoded = [System.Convert]::ToBase64String($bytes)
+    $testRunAttachmentBody = @{
+        stream = $encoded
+        fileName = "report.txt"
+        comment = "Test attachment upload"
+        attachmentType = "GeneralAttachment"
+    }
+    $testApiVersion = "5.0-preview.1"
+    $requestUri = "$($testApiBaseUri)runs/$($testRunId)/attachments?api-version=$($testApiVersion)"
+    $body = $testRunAttachmentBody | ConvertTo-Json
+    Invoke-RestMethod -Uri $requestUri -Method POST -Body $body -ContentType "application/json" -Headers $configuration.azureDevOpsAuthHeader > $null    
+    Write-VstsTaskVerbose "Test run completed."
 }
 
 function Add-VSTestResults {
@@ -269,12 +306,11 @@ function Add-VSTestResults {
         [Parameter(Mandatory=$true)]$configuration,
         [Parameter(Mandatory=$true)]$testRunId,
         [Parameter(Mandatory=$true)]$rules,
-        [Parameter(Mandatory=$true)]$context
+        [Parameter(Mandatory=$true)]$context,
+        [Parameter(Mandatory=$true)]$timer
     )
-    $resultsWarnings = @{}
-    foreach ($warning in $analysisResult.result.warnings) {
-        $resultsWarnings."$($warning.category)" = $warning.details
-    }
+    Write-VstsTaskVerbose "Adding test results..."
+    $timePerTest = [int]((New-TimeSpan -Start $timer.analysisRunStarted.Ticks -End $timer.analysisRunCompleted.Ticks).TotalMilliseconds / 3)
     $deliveryRiskFailed = Get-RiskVerdict -risk $analysisResult.result.risk -threshold $rules.riskLevelThreshold.value
     $deliveryRiskOutcome = $testResultOutcomes.Item($deliveryRiskFailed)
     switch ($configuration.pipelineContext) {
@@ -289,6 +325,7 @@ function Add-VSTestResults {
             outcome = $deliveryRiskOutcome
             automatedTestName = "CodeScene.DeltaAnalysis.DeliveryRisk.$($testNamePostFix)"
             state = "Completed"
+            durationInMs = $timePerTest
             computerName = "CodeScene Delta Analysis"
             automatedTestType = "UnitTest"
             owner = @{
@@ -297,10 +334,11 @@ function Add-VSTestResults {
         },
         @{
             testCaseTitle = "Planned Goals"
-            errorMessage = "$($resultsWarnings.'Violates Goals')"
+            errorMessage = $($analysisResult.result.warnings.'Violates Goals')
             outcome = $testResultOutcomes.Item([boolean]($analysisResult.result.'quality-gates'.'violates-goal'))
             automatedTestName = "CodeScene.DeltaAnalysis.PlannedGoals.$($testNamePostFix)"
             state = "Completed"
+            durationInMs = $timePerTest
             computerName = "CodeScene Delta Analysis"
             automatedTestType = "UnitTest"
             owner = @{
@@ -309,10 +347,11 @@ function Add-VSTestResults {
         },
         @{
             testCaseTitle = "Code Health"
-            errorMessage = "$($resultsWarnings.'Degrades in Code Health')"
+            errorMessage = $($analysisResult.result.warnings.'Degrades in Code Health')
             outcome = $testResultOutcomes.Item([boolean]($analysisResult.result.'quality-gates'.'degrades-in-code-health'))
             automatedTestName = "CodeScene.DeltaAnalysis.CodeHealth$($testNamePostFix)"
             state = "Completed"
+            durationInMs = $timePerTest
             computerName = "CodeScene Delta Analysis"
             automatedTestType = "UnitTest"
             owner = @{
@@ -320,16 +359,95 @@ function Add-VSTestResults {
             }
         }
     )
-    $header = Get-AzureDevOpsAPIHeader
     $testApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/test/"
     $testApiVersion = "5.0"
     $requestUri = "$($testApiBaseUri)runs/$($testRunId)/results?api-version=$($testApiVersion)"
     $body = $testResults | ConvertTo-Json
-    Invoke-RestMethod -Uri $requestUri -Method POST -Body $body -ContentType "application/json" -Headers $header > $null
+    Invoke-RestMethod -Uri $requestUri -Method POST -Body $body -ContentType "application/json" -Headers $configuration.azureDevOpsAuthHeader > $null
+    Write-VstsTaskVerbose "Test results added."
 }
 
-function Publish-AnalysisResults {
+function New-PlainTextAnalysisReport {
+    param (
+        [Parameter(Mandatory=$true)]$context,
+        [Parameter(Mandatory=$true)]$analysisResult,
+        [Parameter(Mandatory=$true)]$timer
+    )
+    $report = @{}
+    $shortReport = "For more information, see attachments."
+    $shortReport += "`r`n"
+    $shortReport += "Delivery risk: $($analysisResult.result.risk)`r`n$($analysisResult.result.description)"
+    if ($analysisResult.result.warnings.Count -gt 0) {
+        $shortReport += "`r`n"
+        $shortReport += "Warnings:"
+        foreach ($warning in $analysisResult.result.warnings.GetEnumerator()) {
+            $shortReport += "`r`n"
+            $shortReport += " - $($warning.Key)"
+        }
+    }
+    $report.short = $shortReport
+    $fullReport = "=== Delta Analysis Report ==="
+    $fullReport += "`r`n"
+    $commitIds = @()
+    foreach ($commit in $context.commits) {
+        $commitIds += $commit.id
+    }
+    $commitIds = $commitIds -join "`r`n"
 
+    $tableData = @{
+        "Project" = $context.releaseDefinitionName
+        "Repository" = $context.repositoryName
+        "Commits" = $commitIds
+        "Analyzed At" = $timer.analysisRunCompleted
+        "Risk Classification (1-10)" = $analysisResult.result.risk
+        "Description" = $analysisResult.result.description
+    }
+    
+    $tabName = "CodeScene Delta Analysis Report"
+    $table = New-Object system.Data.DataTable “$tabName”
+
+    #Define Columns
+    $col1 = New-Object system.Data.DataColumn Name,([string])
+    $col2 = New-Object system.Data.DataColumn Value,([string])
+
+    #Add the Columns
+    $table.columns.add($col1)
+    $table.columns.add($col2)
+
+    foreach ($entry in $tableData.GetEnumerator()) {
+        #Create a row
+        $row = $table.NewRow()
+
+        #Enter data in the row
+        $row.Name = $entry.Key 
+        $row.Value = $entry.Value
+
+        #Add the row to the table
+        $table.Rows.Add($row)
+    }
+    $fullReport += ($table | Format-Table -AutoSize -HideTableHeaders) | Out-String
+    if ($analysisResult.result.warnings.Count -gt 0) {
+        $fullReport += "`r`n"
+        $fullReport += "--- Warnings ---"
+        foreach ($warning in $analysisResult.result.warnings.GetEnumerator()) {
+            $fullReport += "`r`n"
+            $fullReport += "- $($warning.Key)"
+            foreach ($detail in $warning.Value) {
+                $fullReport += "`r`n`t$($detail)"
+            }
+            $fullReport += "`r`n"
+        }
+    }
+    if ($analysisResult.result.improvements.Count -gt 0) {
+        $fullReport += "`r`n"
+        $fullReport += "--- Improvements ---"
+        foreach ($improvement in $analysisResult.result.improvements.GetEnumerator()) {
+            $fullReport += "`r`n"
+            $fullReport += "- $($improvement)"
+        }
+    }
+    $report.full = $fullReport
+    return $report
 }
 
 $testResultOutcomes = @{
@@ -356,11 +474,11 @@ try {
     Write-VstsTaskVerbose "Team project:                      $($configuration.teamProject)"
 
     $context.commits = Get-Commits -context $context -configuration $configuration
-    $timer.analysisRunStarted = [Xml.XmlConvert]::ToString((get-date),[Xml.XmlDateTimeSerializationMode]::Utc)
+    $timer.analysisRunStarted = Get-Date
     $testRun = New-VSTestRun -configuration $configuration -context $context -timer $timer
     $analysisResult = Request-DeltaAnalysis -context $context -configuration $configuration -rules $rules
-    $timer.analysisRunCompleted = [Xml.XmlConvert]::ToString((get-date),[Xml.XmlDateTimeSerializationMode]::Utc)
-    Add-VSTestResults -analysisResult $analysisResult -rules $rules -configuration $configuration -testRunId $testRun.id -context $context
+    $timer.analysisRunCompleted = Get-Date
+    Add-VSTestResults -analysisResult $analysisResult -rules $rules -configuration $configuration -testRunId $testRun.id -context $context -timer $timer
     Complete-VSTestRun -configuration $configuration -context $context -timer $timer -testRunId $testRun.id
 } finally {
     Trace-VstsLeavingInvocation $MyInvocation
