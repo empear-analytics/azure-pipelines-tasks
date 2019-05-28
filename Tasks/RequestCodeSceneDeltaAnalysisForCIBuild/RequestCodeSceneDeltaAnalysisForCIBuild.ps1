@@ -5,11 +5,11 @@ function New-Rules {
     $rules = @{}
 
     $rules.useBiomarkers = @{ value = $true }
-    $rules.riskLevelThreshold = @{ value = Get-VstsInput -Name riskLevelThreshold -AsInt }
-    $rules.couplingThreshold = @{ value = Get-VstsInput -Name couplingThreshold -AsInt }
-    $rules.failTestCaseOnDeliveryRiskFail = Get-VstsInput -Name failTestCaseOnDeliveryRiskFail -AsBool
-    $rules.failTestCasePlannedGoalsFail = Get-VstsInput -Name failTestCasePlannedGoalsFail -AsBool
-    $rules.failTestCaseCodeHealthFail = Get-VstsInput -Name failTestCaseCodeHealthFail -AsBool
+    $rules.riskLevelThreshold = @{ value = Get-VstsInput -Require -Name riskLevelThreshold -AsInt }
+    $rules.couplingThreshold = @{ value = Get-VstsInput -Require -Name couplingThreshold -AsInt }
+    $rules.failTestCaseOnDeliveryRiskFail = Get-VstsInput -Require -Name failTestCaseOnDeliveryRiskFail -AsBool
+    $rules.failTestCasePlannedGoalsFail = Get-VstsInput -Require -Name failTestCasePlannedGoalsFail -AsBool
+    $rules.failTestCaseCodeHealthFail = Get-VstsInput -Require -Name failTestCaseCodeHealthFail -AsBool
 
     return $rules
 }
@@ -17,11 +17,11 @@ function New-Rules {
 function New-Configuration {
     $configuration = @{}
 
-    $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
-    $configuration.codeSceneBaseUrl = Get-VstsInput -Name codeSceneBaseUrl
-    $configuration.projectRESTEndpoint = Get-VstsInput -Name projectRESTEndpoint
-    $configuration.codeSceneAPIUserName = Get-VstsInput -Name codeSceneAPIUserName
-    $configuration.codeSceneAPIPassword = Get-VstsInput -Name codeSceneAPIPassword
+    $configuration.azureDevOpsAPItoken = Get-VstsInput -Require -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
+    $configuration.codeSceneBaseUrl = Get-VstsInput -Require -Name codeSceneBaseUrl
+    $configuration.projectRESTEndpoint = Get-VstsInput -Require -Name projectRESTEndpoint
+    $configuration.codeSceneAPIUserName = Get-VstsInput -Require -Name codeSceneAPIUserName
+    $configuration.codeSceneAPIPassword = Get-VstsInput -Require -Name codeSceneAPIPassword
     $configuration.taskDefinitionsUri = $env:SYSTEM_TASKDEFINITIONSURI
     $configuration.teamFoundationServerUri = $env:SYSTEM_TEAMFOUNDATIONSERVERURI
     $configuration.teamProject = $env:SYSTEM_TEAMPROJECT
@@ -46,6 +46,7 @@ function New-Context {
     $context.environmentName = $env:RELEASE_ENVIRONMENTNAME
     $context.releaseUri = $env:RELEASE_RELEASEURI
     $context.environmentUri = $env:RELEASE_ENVIRONMENTURI
+    $context.testRunDisplayName = Get-VstsInput -Name testRunDisplayName
 
     return $context
 }
@@ -209,7 +210,7 @@ function Request-DeltaAnalysis {
     Write-VstsTaskVerbose "Commit Id(s): $($commitIds)"
     $deltaAnalysisApiUri = "$($configuration.codeSceneBaseUrl)/$($configuration.projectRESTEndpoint)"
     # ========= NB! For testing purposes only! Remove before completing PR! =========
-    $deltaAnalysisApiUri = "https://stsingaporeinternaltest.azurewebsites.net/api/CodeSceneDeltaAnalysisMock"
+    # $deltaAnalysisApiUri = "https://stsingaporeinternaltest.azurewebsites.net/api/CodeSceneDeltaAnalysisMock"
     $credentialsPair = "$($configuration.codeSceneAPIUserName):$($configuration.codeSceneAPIPassword)"
     $basicToken = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($credentialsPair))
     $header = @{ Authorization = "Basic $($basicToken)" }
@@ -256,6 +257,10 @@ function New-VSTestRun {
             $testRunData.releaseEnvironmentUri = $context.environmentUri
         }
         Default {}
+    }
+    if(![string]::IsNullOrEmpty($context.testRunDisplayName))
+    {
+        $testRunData.name = $context.testRunDisplayName
     }
     $testApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/test/"
     $testApiVersion = "5.0"
@@ -447,6 +452,16 @@ function New-PlainTextAnalysisReport {
         }
     }
     $report.full = $fullReport
+    return $report
+}
+
+function New-HtmlAnalysisReport {
+    param (
+        [Parameter(Mandatory=$true)]$context,
+        [Parameter(Mandatory=$true)]$analysisResult,
+        [Parameter(Mandatory=$true)]$timer
+    )
+    
     return $report
 }
 
