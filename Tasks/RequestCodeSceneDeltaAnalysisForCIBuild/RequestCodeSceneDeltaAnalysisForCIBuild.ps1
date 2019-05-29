@@ -17,7 +17,7 @@ function New-Rules {
 function New-Configuration {
     $configuration = @{}
 
-    $configuration.azureDevOpsAPItoken = Get-VstsInput -Require -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
+    $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
     $configuration.codeSceneBaseUrl = Get-VstsInput -Require -Name codeSceneBaseUrl
     $configuration.projectRESTEndpoint = Get-VstsInput -Require -Name projectRESTEndpoint
     $configuration.codeSceneAPIUserName = Get-VstsInput -Require -Name codeSceneAPIUserName
@@ -374,6 +374,7 @@ function New-PlainTextAnalysisReport {
         [Parameter(Mandatory=$true)]$timer
     )
     $report = @{}
+
     $shortReport = "For more information, see attachments."
     $shortReport += "`r`n"
     $shortReport += "Delivery risk: $($analysisResult.result.risk)`r`n$($analysisResult.result.description)"
@@ -386,6 +387,7 @@ function New-PlainTextAnalysisReport {
         }
     }
     $report.short = $shortReport
+
     $fullReport = "=== Delta Analysis Report ==="
     $fullReport += "`r`n"
     $commitIds = @()
@@ -402,44 +404,42 @@ function New-PlainTextAnalysisReport {
         "Risk Classification (1-10)" = $analysisResult.result.risk
         "Description" = $analysisResult.result.description
     }
-    
-    $tabName = "CodeScene Delta Analysis Report"
-    $table = New-Object system.Data.DataTable “$tabName”
-
-    #Define Columns
-    $col1 = New-Object system.Data.DataColumn Name,([string])
-    $col2 = New-Object system.Data.DataColumn Value,([string])
-
-    #Add the Columns
-    $table.columns.add($col1)
-    $table.columns.add($col2)
-
+    $reportData = @()
     foreach ($entry in $tableData.GetEnumerator()) {
-        $row = $table.NewRow()
-        $row.Name = $entry.Key 
-        $row.Value = $entry.Value
-        $table.Rows.Add($row)
+        $reportDataItem = New-Object PSCustomObject
+        $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value $entry.Key
+        $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $entry.Value
+    
+        $reportData += $reportDataItem
     }
-    $fullReport += ($table | Format-Table -AutoSize -HideTableHeaders) | Out-String
+    $fullReport += ($reportData | Format-Table -AutoSize -HideTableHeaders) | Out-String
     if ($analysisResult.result.warnings.Count -gt 0) {
-        $fullReport += "`r`n"
         $fullReport += "--- Warnings ---"
+        $reportData = @()
         foreach ($warning in $analysisResult.result.warnings.GetEnumerator()) {
-            $fullReport += "`r`n"
-            $fullReport += "- $($warning.Key)"
+            $reportDataItem = New-Object PSCustomObject
+            $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value $warning.Key
+            $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value ""
+            $reportData += $reportDataItem
             foreach ($detail in $warning.Value) {
-                $fullReport += "`r`n`t$($detail)"
+                $reportDataItem = New-Object PSCustomObject
+                $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value ""
+                $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $detail
+                $reportData += $reportDataItem
             }
-            $fullReport += "`r`n"
         }
+        $fullReport += ($reportData | Format-Table -AutoSize -HideTableHeaders) | Out-String
     }
     if ($analysisResult.result.improvements.Count -gt 0) {
-        $fullReport += "`r`n"
         $fullReport += "--- Improvements ---"
+        $reportData = @()
         foreach ($improvement in $analysisResult.result.improvements.GetEnumerator()) {
-            $fullReport += "`r`n"
-            $fullReport += "- $($improvement)"
+            $reportDataItem = New-Object PSCustomObject
+            $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value ""
+            $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $improvement
+            $reportData += $reportDataItem
         }
+        $fullReport += ($reportData | Format-Table -AutoSize -HideTableHeaders) | Out-String
     }
     $report.full = $fullReport
     return $report
@@ -473,6 +473,8 @@ function New-HtmlAnalysisReport {
     
         $reportData += $reportDataItem
     }
+    
+    $fullReport = ($reportData | Format-Table -AutoSize -HideTableHeaders) | Out-String
     # if ($analysisResult.result.warnings.Count -gt 0) {
     #     $fullReport += "`r`n"
     #     $fullReport += "--- Warnings ---"
@@ -498,7 +500,7 @@ function New-HtmlAnalysisReport {
             $reportSubTitle = $context.buildDefinitionName
         }
         "release" {
-            $reportSubTitle = $context.releaseDefinitionName
+            $reportSubTitle = "$($context.releaseDefinitionName) - $($context.environmentName)"
         }
         Default {}
     }
@@ -512,7 +514,7 @@ function New-HtmlAnalysisReport {
     $a = $a + "</style>"
     $a = $a + "<title>$($reportSubTitle)</title>"
 
-    $html = $reportData | ConvertTo-HTML -head $a -body "<H1>CodeScene Delta Analysis Result</H1><H3>$($reportSubTitle)</H3>" -PostContent "HejHej"
+    $html = $reportData | ConvertTo-HTML -head $a -body "<H1>CodeScene Delta Analysis Result</H1><i><b>$($reportSubTitle)</i></b>" -PostContent "<h2>Modifies Hotspot</h2>"
     $html -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'" -replace '&quot;','"' | Out-File "C:\Users\tobia\Downloads\report.htm"
     return $report
 }
@@ -547,6 +549,7 @@ try {
     $timer.analysisRunCompleted = Get-Date
     Add-VSTestResults -analysisResult $analysisResult -rules $rules -configuration $configuration -testRunId $testRun.id -context $context -timer $timer
     Complete-VSTestRun -configuration $configuration -context $context -timer $timer -testRunId $testRun.id
+    # $plainTextReport = New-PlainTextAnalysisReport -context $context -analysisResult $analysisResult -timer $timer
     # $htmlReport = New-HtmlAnalysisReport -context $context -analysisResult $analysisResult -timer $timer
 } finally {
     Trace-VstsLeavingInvocation $MyInvocation
