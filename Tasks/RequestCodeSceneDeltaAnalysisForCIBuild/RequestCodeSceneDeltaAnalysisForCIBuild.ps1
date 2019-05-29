@@ -46,7 +46,6 @@ function New-Context {
     $context.environmentName = $env:RELEASE_ENVIRONMENTNAME
     $context.releaseUri = $env:RELEASE_RELEASEURI
     $context.environmentUri = $env:RELEASE_ENVIRONMENTURI
-    $context.testRunDisplayName = Get-VstsInput -Name testRunDisplayName
 
     return $context
 }
@@ -258,10 +257,6 @@ function New-VSTestRun {
         }
         Default {}
     }
-    if(![string]::IsNullOrEmpty($context.testRunDisplayName))
-    {
-        $testRunData.name = $context.testRunDisplayName
-    }
     $testApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/test/"
     $testApiVersion = "5.0"
     $requestUri = "$($testApiBaseUri)runs?api-version=$($testApiVersion)"
@@ -420,14 +415,9 @@ function New-PlainTextAnalysisReport {
     $table.columns.add($col2)
 
     foreach ($entry in $tableData.GetEnumerator()) {
-        #Create a row
         $row = $table.NewRow()
-
-        #Enter data in the row
         $row.Name = $entry.Key 
         $row.Value = $entry.Value
-
-        #Add the row to the table
         $table.Rows.Add($row)
     }
     $fullReport += ($table | Format-Table -AutoSize -HideTableHeaders) | Out-String
@@ -461,7 +451,69 @@ function New-HtmlAnalysisReport {
         [Parameter(Mandatory=$true)]$analysisResult,
         [Parameter(Mandatory=$true)]$timer
     )
+    $commitIds = @()
+    foreach ($commit in $context.commits) {
+        $commitIds += $commit.id
+    }
+    $commitIds = $commitIds -join "`r`n"
+
+    $tableData = @{
+        "Project" = $context.releaseDefinitionName
+        "Repository" = $context.repositoryName
+        "Commits" = $commitIds
+        "Analyzed At" = $timer.analysisRunCompleted
+        "Risk Classification (1-10)" = $analysisResult.result.risk
+        "Description" = $analysisResult.result.description
+    }
+    $reportData = @()
+    foreach ($entry in $tableData.GetEnumerator()) {
+        $reportDataItem = New-Object PSCustomObject
+        $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value $entry.Key
+        $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $entry.Value
     
+        $reportData += $reportDataItem
+    }
+    # if ($analysisResult.result.warnings.Count -gt 0) {
+    #     $fullReport += "`r`n"
+    #     $fullReport += "--- Warnings ---"
+    #     foreach ($warning in $analysisResult.result.warnings.GetEnumerator()) {
+    #         $fullReport += "`r`n"
+    #         $fullReport += "- $($warning.Key)"
+    #         foreach ($detail in $warning.Value) {
+    #             $fullReport += "`r`n`t$($detail)"
+    #         }
+    #         $fullReport += "`r`n"
+    #     }
+    # }
+    # if ($analysisResult.result.improvements.Count -gt 0) {
+    #     $fullReport += "`r`n"
+    #     $fullReport += "--- Improvements ---"
+    #     foreach ($improvement in $analysisResult.result.improvements.GetEnumerator()) {
+    #         $fullReport += "`r`n"
+    #         $fullReport += "- $($improvement)"
+    #     }
+    # }
+    switch ($configuration.pipelineContext) {
+        "build" {
+            $reportSubTitle = $context.buildDefinitionName
+        }
+        "release" {
+            $reportSubTitle = $context.releaseDefinitionName
+        }
+        Default {}
+    }
+    # Generate html file
+    $a = "<style>"
+    $a = $a + "BODY{background-color:white;font-family:`"Helvetica Neue`",Helvetica,Arial,sans-serif;}"
+    $a = $a + "TABLE{border-width: 1px;border-style: none;border-color: black;border-collapse: collapse;}"
+    $a = $a + "TH{display:none;}"
+    $a = $a + "TD{border-width: 1px;padding: 0px;border-style: none;border-color: black;padding:5px;font-size: 12px;}"
+    $a = $a + "tr:nth-child(even){background-color: #dcdcdc}"
+    $a = $a + "</style>"
+    $a = $a + "<title>$($reportSubTitle)</title>"
+
+    $html = $reportData | ConvertTo-HTML -head $a -body "<H1>CodeScene Delta Analysis Result</H1><H3>$($reportSubTitle)</H3>" -PostContent "HejHej"
+    $html -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'" -replace '&quot;','"' | Out-File "C:\Users\tobia\Downloads\report.htm"
     return $report
 }
 
@@ -495,6 +547,7 @@ try {
     $timer.analysisRunCompleted = Get-Date
     Add-VSTestResults -analysisResult $analysisResult -rules $rules -configuration $configuration -testRunId $testRun.id -context $context -timer $timer
     Complete-VSTestRun -configuration $configuration -context $context -timer $timer -testRunId $testRun.id
+    # $htmlReport = New-HtmlAnalysisReport -context $context -analysisResult $analysisResult -timer $timer
 } finally {
     Trace-VstsLeavingInvocation $MyInvocation
 }

@@ -14,18 +14,13 @@
   "version": {
     "Major": "0",
     "Minor": "1",
-    "Patch": "2"
+    "Patch": "3"
   },
   "minimumAgentVersion": "1.95.0",
   "groups": [
       {
           "name": "rules",
           "displayName": "Analysis rules",
-          "isExpanded": false
-      },
-      {
-          "name": "advanced",
-          "displayName": "Advanced",
           "isExpanded": false
       }
   ],
@@ -119,14 +114,6 @@
         "required": true,
         "helpMarkDown": "Specifies minimal temporal coupling for the “Absence of Expected Change” warning.",
         "groupName": "rules"
-    },
-    {
-        "name": "testRunDisplayName",
-        "type": "string",
-        "label": "Test Run Display Name",
-        "required": false,
-        "helpMarkDown": "[Optional] Specifies a name for the test run. Default is 'CodeScene Delta Analysis - [release name]'",
-        "groupName": "advanced"
     }
   ],
   "execution": {
