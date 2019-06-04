@@ -16,7 +16,7 @@ function New-Rules {
 
 function New-Configuration {
     $configuration = @{}
-
+    
     $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
     $configuration.codeSceneBaseUrl = Get-VstsInput -Require -Name codeSceneBaseUrl
     $configuration.projectRESTEndpoint = Get-VstsInput -Require -Name projectRESTEndpoint
@@ -25,6 +25,7 @@ function New-Configuration {
     $configuration.taskDefinitionsUri = $env:SYSTEM_TASKDEFINITIONSURI
     $configuration.teamFoundationServerUri = $env:SYSTEM_TEAMFOUNDATIONSERVERURI
     $configuration.teamProject = $env:SYSTEM_TEAMPROJECT
+    $configuration.workingDirectory = $env:SYSTEM_DEFAULTWORKINGDIRECTORY
     $configuration.pipelineContext = Get-Pipeline-Context
     $configuration.azureDevOpsAuthHeader = Get-AzureDevOpsAuthHeader
 
@@ -367,6 +368,50 @@ function Add-VSTestResults {
     Write-VstsTaskVerbose "Test results added."
 }
 
+function Publish-BuildTaskHtmlSummary {
+    param (
+        [Parameter(Mandatory=$true)]$htmlSummary,
+        [Parameter(Mandatory=$true)]$configuration
+    )
+    $htmlSummaryPath = "$($configuration.workingDirectory)\summary.html"
+    $htmlSummary | Out-File $htmlSummaryPath
+    Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Delta Analysis Report;]$($htmlSummaryPath)"
+}
+
+function New-WarningsTable {
+    param (
+        [Parameter(Mandatory=$true)]$analysisResult
+    )
+    $table = @()
+    foreach ($warning in $analysisResult.result.warnings.GetEnumerator()) {
+        $tableItem = New-Object PSCustomObject
+        $tableItem | Add-Member -MemberType NoteProperty -Name Key -Value $warning.Key
+        $tableItem | Add-Member -MemberType NoteProperty -Name Value -Value ""
+        $table += $tableItem
+        foreach ($detail in $warning.Value) {
+            $tableItem = New-Object PSCustomObject
+            $tableItem | Add-Member -MemberType NoteProperty -Name Key -Value ""
+            $tableItem | Add-Member -MemberType NoteProperty -Name Value -Value $detail
+            $table += $tableItem
+        }
+    }
+    return $table
+}
+
+function New-ImprovementsTable {
+    param (
+        [Parameter(Mandatory=$true)]$analysisResult
+    )
+    $table = @()
+    foreach ($improvement in $analysisResult.result.improvements.GetEnumerator()) {
+        $tableItem = New-Object PSCustomObject
+        $tableItem | Add-Member -MemberType NoteProperty -Name Key -Value ""
+        $tableItem | Add-Member -MemberType NoteProperty -Name Value -Value $improvement
+        $table += $tableItem
+    }
+    return $table
+}
+
 function New-PlainTextAnalysisReport {
     param (
         [Parameter(Mandatory=$true)]$context,
@@ -396,7 +441,7 @@ function New-PlainTextAnalysisReport {
     }
     $commitIds = $commitIds -join "`r`n"
 
-    $tableData = @{
+    $summaryTableData = @{
         "Project" = $context.releaseDefinitionName
         "Repository" = $context.repositoryName
         "Commits" = $commitIds
@@ -404,42 +449,24 @@ function New-PlainTextAnalysisReport {
         "Risk Classification (1-10)" = $analysisResult.result.risk
         "Description" = $analysisResult.result.description
     }
-    $reportData = @()
-    foreach ($entry in $tableData.GetEnumerator()) {
-        $reportDataItem = New-Object PSCustomObject
-        $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value $entry.Key
-        $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $entry.Value
+    $summaryData = @()
+    foreach ($entry in $summaryTableData.GetEnumerator()) {
+        $summaryDataItem = New-Object PSCustomObject
+        $summaryDataItem | Add-Member -MemberType NoteProperty -Name Key -Value $entry.Key
+        $summaryDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $entry.Value
     
-        $reportData += $reportDataItem
+        $summaryData += $summaryDataItem
     }
-    $fullReport += ($reportData | Format-Table -AutoSize -HideTableHeaders) | Out-String
+    $fullReport += ($summaryData | Format-Table -AutoSize -HideTableHeaders) | Out-String
     if ($analysisResult.result.warnings.Count -gt 0) {
         $fullReport += "--- Warnings ---"
-        $reportData = @()
-        foreach ($warning in $analysisResult.result.warnings.GetEnumerator()) {
-            $reportDataItem = New-Object PSCustomObject
-            $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value $warning.Key
-            $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value ""
-            $reportData += $reportDataItem
-            foreach ($detail in $warning.Value) {
-                $reportDataItem = New-Object PSCustomObject
-                $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value ""
-                $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $detail
-                $reportData += $reportDataItem
-            }
-        }
-        $fullReport += ($reportData | Format-Table -AutoSize -HideTableHeaders) | Out-String
+        $warnings = New-WarningsTable -analysisResult $analysisResult
+        $fullReport += ($warnings | Format-Table -AutoSize -HideTableHeaders) | Out-String
     }
     if ($analysisResult.result.improvements.Count -gt 0) {
         $fullReport += "--- Improvements ---"
-        $reportData = @()
-        foreach ($improvement in $analysisResult.result.improvements.GetEnumerator()) {
-            $reportDataItem = New-Object PSCustomObject
-            $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value ""
-            $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $improvement
-            $reportData += $reportDataItem
-        }
-        $fullReport += ($reportData | Format-Table -AutoSize -HideTableHeaders) | Out-String
+        $improvements = New-ImprovementsTable -analysisResult $analysisResult
+        $fullReport += ($improvements | Format-Table -AutoSize -HideTableHeaders) | Out-String
     }
     $report.full = $fullReport
     return $report
@@ -455,7 +482,7 @@ function New-HtmlAnalysisReport {
     foreach ($commit in $context.commits) {
         $commitIds += $commit.id
     }
-    $commitIds = $commitIds -join "`r`n"
+    $commitIds = $commitIds -join " "
 
     $tableData = @{
         "Project" = $context.releaseDefinitionName
@@ -465,36 +492,7 @@ function New-HtmlAnalysisReport {
         "Risk Classification (1-10)" = $analysisResult.result.risk
         "Description" = $analysisResult.result.description
     }
-    $reportData = @()
-    foreach ($entry in $tableData.GetEnumerator()) {
-        $reportDataItem = New-Object PSCustomObject
-        $reportDataItem | Add-Member -MemberType NoteProperty -Name Key -Value $entry.Key
-        $reportDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $entry.Value
-    
-        $reportData += $reportDataItem
-    }
-    
-    $fullReport = ($reportData | Format-Table -AutoSize -HideTableHeaders) | Out-String
-    # if ($analysisResult.result.warnings.Count -gt 0) {
-    #     $fullReport += "`r`n"
-    #     $fullReport += "--- Warnings ---"
-    #     foreach ($warning in $analysisResult.result.warnings.GetEnumerator()) {
-    #         $fullReport += "`r`n"
-    #         $fullReport += "- $($warning.Key)"
-    #         foreach ($detail in $warning.Value) {
-    #             $fullReport += "`r`n`t$($detail)"
-    #         }
-    #         $fullReport += "`r`n"
-    #     }
-    # }
-    # if ($analysisResult.result.improvements.Count -gt 0) {
-    #     $fullReport += "`r`n"
-    #     $fullReport += "--- Improvements ---"
-    #     foreach ($improvement in $analysisResult.result.improvements.GetEnumerator()) {
-    #         $fullReport += "`r`n"
-    #         $fullReport += "- $($improvement)"
-    #     }
-    # }
+
     switch ($configuration.pipelineContext) {
         "build" {
             $reportSubTitle = $context.buildDefinitionName
@@ -504,19 +502,55 @@ function New-HtmlAnalysisReport {
         }
         Default {}
     }
-    # Generate html file
-    $a = "<style>"
-    $a = $a + "BODY{background-color:white;font-family:`"Helvetica Neue`",Helvetica,Arial,sans-serif;}"
-    $a = $a + "TABLE{border-width: 1px;border-style: none;border-color: black;border-collapse: collapse;}"
-    $a = $a + "TH{display:none;}"
-    $a = $a + "TD{border-width: 1px;padding: 0px;border-style: none;border-color: black;padding:5px;font-size: 12px;}"
-    $a = $a + "tr:nth-child(even){background-color: #dcdcdc}"
-    $a = $a + "</style>"
-    $a = $a + "<title>$($reportSubTitle)</title>"
 
-    $html = $reportData | ConvertTo-HTML -head $a -body "<H1>CodeScene Delta Analysis Result</H1><i><b>$($reportSubTitle)</i></b>" -PostContent "<h2>Modifies Hotspot</h2>"
-    $html -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'" -replace '&quot;','"' | Out-File "C:\Users\tobia\Downloads\report.htm"
-    return $report
+    $summaryData = @()
+    foreach ($entry in $tableData.GetEnumerator()) {
+        $summaryDataItem = New-Object PSCustomObject
+        $summaryDataItem | Add-Member -MemberType NoteProperty -Name Key -Value $entry.Key
+        $summaryDataItem | Add-Member -MemberType NoteProperty -Name Value -Value $entry.Value
+    
+        $summaryData += $summaryDataItem
+    }
+    $summary = "<div class=`"summaryTable`">" + ($summaryData | ConvertTo-Html -Fragment | Out-String) + "</div>"
+
+    if ($analysisResult.result.warnings.Count -gt 0) {
+        $warnings = New-WarningsTable -analysisResult $analysisResult
+        $warnings = "<h2>Warnings</h2><div class=`"warningsTable`">" + ($warnings | ConvertTo-HTML -Fragment | Out-String) + "</div>"
+    }
+    if ($analysisResult.result.improvements.Count -gt 0) {
+        $improvements = New-ImprovementsTable -analysisResult $analysisResult
+        $improvements = "<h2>Improvements</h2><div class=`"warningsTable`">" + ($improvements | ConvertTo-HTML -Fragment | Out-String) + "</div>"
+    }
+
+    $css = @'
+    <style>
+    body {font-family: Lucida Console;}
+    h1 {font-size:28pt;font-family:Helvetica, Arial, sans-serif;}
+    h2 {font-size:18pt;font-family:Helvetica, Arial, sans-serif;}
+    h3 {font-size:16pt;font-style: italic;font-weight: normal;font-family:Helvetica, Arial, sans-serif;}
+
+    table.summaryTable {border-style: none; font-family: Lucida Console;}
+    .summaryTable th{display:none;}
+    .summaryTable TR:Nth-Child(even) {Background-Color: #dcdcdc;}
+    .summaryTable td{padding: 5px;border-style: none;font-size: 14px;width: 500px}
+    .summaryTable td:first-child {font-weight: bold; width: 250px}
+    
+    table.warningsTable {border-style: none}
+    .warningsTable th{display:none;}
+    .warningsTable td{padding: 0px;border-style: none;font-size: 14px;}
+    .warningsTable td:first-child {font-weight: bold}
+    
+    table.improvementsTable {border-style: none}
+    .improvementsTable th{display:none;}
+    .improvementsTable td{padding: 0px;border-style: none;font-size: 14px;}
+    .improvementsTable td:first-child {font-weight: bold}
+    </style>
+'@
+
+    $head = $css + "<title>$($reportSubTitle)</title>"
+
+    $htmlReport = (ConvertTo-HTML -head $head -body "<h1>CodeScene Delta Analysis Result</h1><h3>$($reportSubTitle)</h3><hr>" -PostContent ($summary+$warnings+$improvements)) -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'" -replace '&quot;','"'
+    return $htmlReport
 }
 
 $testResultOutcomes = @{
@@ -549,8 +583,9 @@ try {
     $timer.analysisRunCompleted = Get-Date
     Add-VSTestResults -analysisResult $analysisResult -rules $rules -configuration $configuration -testRunId $testRun.id -context $context -timer $timer
     Complete-VSTestRun -configuration $configuration -context $context -timer $timer -testRunId $testRun.id
-    # $plainTextReport = New-PlainTextAnalysisReport -context $context -analysisResult $analysisResult -timer $timer
-    # $htmlReport = New-HtmlAnalysisReport -context $context -analysisResult $analysisResult -timer $timer
+    if ($configuration.pipelineContext -eq "build") {
+        Publish-BuildTaskHtmlSummary -htmlSummary ($htmlReport = New-HtmlAnalysisReport -context $context -analysisResult $analysisResult -timer $timer) -configuration $configuration
+    }
 } finally {
     Trace-VstsLeavingInvocation $MyInvocation
 }
