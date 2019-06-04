@@ -1,7 +1,7 @@
 {
   "id": "dc1de4c0-7244-11e9-9efc-017f0c5356be",
-  "name": "RequestCodeSceneDeltaAnalysisForCIPipeline",
-  "friendlyName": "Request CodeScene Delta Analysis",
+  "name": "RequestCodeSceneCIDeltaAnalysis",
+  "friendlyName": "Request CodeScene CI Delta Analysis",
   "description": "Requests CodeScene Delta Analysis and returns the results to the CI pipeline",
   "author": "Tobias Anderson",
   "helpMarkDown": "This task requires the agent job setting \"Allow scripts to access the OAuth token\" to be enabled, please see https://docs.microsoft.com/en-us/azure/devops/pipelines/process/phases?view=azure-devops&tabs=yaml#access-to-oauth-token. For more information regarding CodeScene Delta Analysis, please refer to the documentaion available in CodeScene (<codescene-base-url>/docs/guides/delta/automated-delta-analyses.html)",
@@ -118,7 +118,7 @@
   ],
   "execution": {
     "PowerShell3": {
-      "target": "RequestCodeSceneDeltaAnalysisForCIPipeline.ps1"
+      "target": "RequestCodeSceneCIDeltaAnalysis.ps1"
     }
   }
 }
