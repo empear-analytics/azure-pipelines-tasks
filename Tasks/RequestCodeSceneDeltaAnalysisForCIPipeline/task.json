@@ -1,6 +1,6 @@
 {
   "id": "dc1de4c0-7244-11e9-9efc-017f0c5356be",
-  "name": "RequestCodeSceneDeltaAnalysisForCIBuild",
+  "name": "RequestCodeSceneDeltaAnalysisForCIPipeline",
   "friendlyName": "Request CodeScene Delta Analysis",
   "description": "Requests CodeScene Delta Analysis and returns the results to the CI pipeline",
   "author": "Tobias Anderson",
@@ -14,7 +14,7 @@
   "version": {
     "Major": "0",
     "Minor": "2",
-    "Patch": "0"
+    "Patch": "1"
   },
   "minimumAgentVersion": "1.95.0",
   "groups": [
@@ -118,7 +118,7 @@
   ],
   "execution": {
     "PowerShell3": {
-      "target": "RequestCodeSceneDeltaAnalysisForCIBuild.ps1"
+      "target": "RequestCodeSceneDeltaAnalysisForCIPipeline.ps1"
     }
   }
 }
