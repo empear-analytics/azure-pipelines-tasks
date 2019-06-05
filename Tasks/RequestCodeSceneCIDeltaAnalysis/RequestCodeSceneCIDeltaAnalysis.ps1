@@ -39,6 +39,7 @@ function New-Context {
     $context.repositoryId = $env:BUILD_REPOSITORY_ID
     $context.sourceBranch = $env:BUILD_SOURCEBRANCH
     $context.buildId = $env:BUILD_BUILDID
+    $context.buildSourceVersion = $env:BUILD_SOURCEVERSION
     $context.buildDefinitionId = $env:BUILD_DEFINITIONID
     $context.buildDefinitionName = $env:BUILD_DEFINITIONNAME
     $context.releaseId = $env:RELEASE_RELEASEID
@@ -153,12 +154,8 @@ function Get-Commits {
     Write-Host "Gathering commits..."
     switch ($configuration.pipelineContext) {
         "build" {
-            Write-VstsTaskVerbose "Getting commits for build $($context.buildId)"
-            $buildApiBaseUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/build/"
-            $buildApiVersion = "5.0"
-            $requestUri = "$($buildApiBaseUri)builds/$($context.buildId)/changes?api-version=$($buildApiVersion)"
-            $response = Invoke-RestMethod -Uri $requestUri -Method GET -Headers $configuration.azureDevOpsAuthHeader
-            $commits = $response.value
+            $commit = @{id = $context.buildSourceVersion}
+            $commits = @($commit)
         }
         "release" {
             Write-VstsTaskVerbose "Getting commits for release $($context.releaseId)"
