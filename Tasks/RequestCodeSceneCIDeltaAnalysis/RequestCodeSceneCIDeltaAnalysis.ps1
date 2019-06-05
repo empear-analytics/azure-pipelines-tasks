@@ -283,8 +283,12 @@ function Complete-VSTestRun {
     $requestUri = "$($testApiBaseUri)runs/$($testRunId)?api-version=$($testApiVersion)"
     $body = $testRunData | ConvertTo-Json
     Invoke-RestMethod -Uri $requestUri -Method PATCH -Body $body -ContentType "application/json" -Headers $configuration.azureDevOpsAuthHeader > $null
+    Write-VstsTaskVerbose "Full report text:"
+    Write-VstsTaskVerbose $report.full
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($report.full)
     $encoded = [System.Convert]::ToBase64String($bytes)
+    Write-VstsTaskVerbose "Base64 encoded stream:"
+    Write-VstsTaskVerbose $encoded
     $testRunAttachmentBody = @{
         stream = $encoded
         fileName = "report.txt"
