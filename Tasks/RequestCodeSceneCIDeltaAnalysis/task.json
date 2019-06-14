@@ -13,8 +13,8 @@
   "demands": [],
   "version": {
     "Major": "0",
-    "Minor": "2",
-    "Patch": "4"
+    "Minor": "3",
+    "Patch": "14"
   },
   "minimumAgentVersion": "1.95.0",
   "groups": [
@@ -105,15 +105,6 @@
             "9": "9",
             "10": "10"
         }
-    },
-    {
-        "name": "couplingThreshold",
-        "type": "string",
-        "label": "Coupling threshold (%)",
-        "defaultValue": "80",
-        "required": true,
-        "helpMarkDown": "Specifies minimal temporal coupling for the “Absence of Expected Change” warning.",
-        "groupName": "rules"
     }
   ],
   "execution": {

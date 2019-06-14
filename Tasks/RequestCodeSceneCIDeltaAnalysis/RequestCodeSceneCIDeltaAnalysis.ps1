@@ -6,7 +6,7 @@ function New-Rules {
 
     $rules.useBiomarkers = @{ value = $true }
     $rules.riskLevelThreshold = @{ value = Get-VstsInput -Require -Name riskLevelThreshold -AsInt }
-    $rules.couplingThreshold = @{ value = Get-VstsInput -Require -Name couplingThreshold -AsInt }
+    $rules.couplingThreshold = @{ value = 80 }
     $rules.failTestCaseOnDeliveryRiskFail = Get-VstsInput -Require -Name failTestCaseOnDeliveryRiskFail -AsBool
     $rules.failTestCasePlannedGoalsFail = Get-VstsInput -Require -Name failTestCasePlannedGoalsFail -AsBool
     $rules.failTestCaseCodeHealthFail = Get-VstsInput -Require -Name failTestCaseCodeHealthFail -AsBool
@@ -283,12 +283,8 @@ function Complete-VSTestRun {
     $requestUri = "$($testApiBaseUri)runs/$($testRunId)?api-version=$($testApiVersion)"
     $body = $testRunData | ConvertTo-Json
     Invoke-RestMethod -Uri $requestUri -Method PATCH -Body $body -ContentType "application/json" -Headers $configuration.azureDevOpsAuthHeader > $null
-    Write-VstsTaskVerbose "Full report text:"
-    Write-VstsTaskVerbose $report.full
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($report.full)
     $encoded = [System.Convert]::ToBase64String($bytes)
-    Write-VstsTaskVerbose "Base64 encoded stream:"
-    Write-VstsTaskVerbose $encoded
     $testRunAttachmentBody = @{
         stream = $encoded
         fileName = "report.txt"
@@ -369,13 +365,56 @@ function Add-VSTestResults {
     Write-VstsTaskVerbose "Test results added."
 }
 
+function Set-HtmlElementAttribute {
+    param (
+        [Parameter(Mandatory=$true)]$html,
+        [Parameter(Mandatory=$true)]$elementTag,
+        [Parameter(Mandatory=$true)]$attribute
+    )
+    return $html -replace "<$($elementTag)>", "<$($elementTag) $($attribute)>"
+}
+
+function Add-ColgroupAttribute {
+    param (
+        [Parameter(Mandatory=$true)]$html,
+        [Parameter(Mandatory=$true)]$attribute,
+        $span
+    )
+    if (![string]::IsNullOrEmpty($span)) {
+        $spanAttribute = "span=`"$($span)`""
+    }
+    return $html -replace "<colgroup>", "<colgroup><col $($spanAttribute) $($attribute)>"
+}
+
+function Add-HtmlTag {
+    param (
+        [Parameter(Mandatory=$true)]$string,
+        [Parameter(Mandatory=$true)]$startTag,
+        [Parameter(Mandatory=$true)]$endTag
+    )
+    return $startTag+$string+$endTag
+}
+
+function Remove-HtmlTableHeader {
+    param (
+        [Parameter(Mandatory=$true)]$html
+    )
+    [System.Collections.ArrayList]$htmlArray = $html -split "`r`n"
+    foreach ($row in $htmlArray) {
+        if ($row -match '<th') { break }
+    }
+    $htmlArray.Remove($row)
+    return $htmlArray -join "`r`n"
+}
+
 function Publish-BuildTaskHtmlSummary {
     param (
         [Parameter(Mandatory=$true)]$htmlSummary,
         [Parameter(Mandatory=$true)]$configuration
     )
     $htmlSummaryPath = "$($configuration.workingDirectory)\summary.html"
-    $htmlSummary | Out-File $htmlSummaryPath
+    Write-VstsTaskVerbose $htmlSummary
+    $htmlSummary | Out-File $htmlSummaryPath -Encoding UTF8
     Write-Host "##vso[task.addattachment type=Distributedtask.Core.Summary;name=Delta Analysis Report;]$($htmlSummaryPath)"
 }
 
@@ -443,7 +482,7 @@ function New-PlainTextAnalysisReport {
     $commitIds = $commitIds -join "`r`n"
 
     $summaryTableData = @{
-        "Project" = $context.releaseDefinitionName
+        "Project" = $analysisResult.project.name
         "Repository" = $context.repositoryName
         "Commits" = $commitIds
         "Analyzed At" = $timer.analysisRunCompleted
@@ -458,16 +497,16 @@ function New-PlainTextAnalysisReport {
     
         $summaryData += $summaryDataItem
     }
-    $fullReport += ($summaryData | Format-Table -AutoSize -HideTableHeaders) | Out-String
+    $fullReport += ($summaryData | Format-Table -HideTableHeaders -Wrap) | Out-String
     if ($analysisResult.result.warnings.Count -gt 0) {
         $fullReport += "--- Warnings ---"
         $warnings = New-WarningsTable -analysisResult $analysisResult
-        $fullReport += ($warnings | Format-Table -AutoSize -HideTableHeaders) | Out-String
+        $fullReport += ($warnings | Format-Table -HideTableHeaders) | Out-String -Stream -Width 4096
     }
     if ($analysisResult.result.improvements.Count -gt 0) {
         $fullReport += "--- Improvements ---"
         $improvements = New-ImprovementsTable -analysisResult $analysisResult
-        $fullReport += ($improvements | Format-Table -AutoSize -HideTableHeaders) | Out-String
+        $fullReport += ($improvements | Format-Table -HideTableHeaders) | Out-String -Stream -Width 4096
     }
     $report.full = $fullReport
     return $report
@@ -486,22 +525,12 @@ function New-HtmlAnalysisReport {
     $commitIds = $commitIds -join " "
 
     $tableData = @{
-        "Project" = $context.releaseDefinitionName
+        "Project" = $analysisResult.project.name
         "Repository" = $context.repositoryName
         "Commits" = $commitIds
         "Analyzed At" = $timer.analysisRunCompleted
         "Risk Classification (1-10)" = $analysisResult.result.risk
         "Description" = $analysisResult.result.description
-    }
-
-    switch ($configuration.pipelineContext) {
-        "build" {
-            $reportSubTitle = $context.buildDefinitionName
-        }
-        "release" {
-            $reportSubTitle = "$($context.releaseDefinitionName) - $($context.environmentName)"
-        }
-        Default {}
     }
 
     $summaryData = @()
@@ -512,45 +541,30 @@ function New-HtmlAnalysisReport {
     
         $summaryData += $summaryDataItem
     }
-    $summary = "<div class=`"summaryTable`">" + ($summaryData | ConvertTo-Html -Fragment | Out-String) + "</div>"
+    foreach ($row in $summaryData) {
+        $row.Key = Add-HtmlTag -string $row.Key -startTag "<b>" -endTag "</b>"
+    }
+    $summary = $summaryData | ConvertTo-Html -Fragment | Out-String
+    $summary = Set-HtmlElementAttribute -html $summary -elementTag "table" -attribute "style=`"font-size: 14px; width: 700px`""
+    $summary = Add-ColgroupAttribute -html $summary -attribute "width=`"200`"" -span 1
+    $summary = Remove-HtmlTableHeader $summary
 
     if ($analysisResult.result.warnings.Count -gt 0) {
         $warnings = New-WarningsTable -analysisResult $analysisResult
-        $warnings = "<h2>Warnings</h2><div class=`"warningsTable`">" + ($warnings | ConvertTo-HTML -Fragment | Out-String) + "</div>"
+        foreach ($row in $warnings) {
+            $row.Key = Add-HtmlTag -string $row.Key -startTag "<b>" -endTag "</b>"
+        }
+        $warnings = "<h2>Warnings</h2>" + ($warnings | ConvertTo-HTML -Fragment | Out-String)
+        $warnings = Set-HtmlElementAttribute -html $warnings -elementTag "table" -attribute "style=`"font-size: 14px`""
+        $warnings = Remove-HtmlTableHeader $warnings
     }
     if ($analysisResult.result.improvements.Count -gt 0) {
         $improvements = New-ImprovementsTable -analysisResult $analysisResult
-        $improvements = "<h2>Improvements</h2><div class=`"warningsTable`">" + ($improvements | ConvertTo-HTML -Fragment | Out-String) + "</div>"
+        $improvements = "<h2>Improvements</h2>" + ($improvements | ConvertTo-HTML -Fragment | Out-String)
+        $improvements = Set-HtmlElementAttribute -html $improvements -elementTag "table" -attribute "style=`"font-size: 14px`""
+        $improvements = Remove-HtmlTableHeader $improvements
     }
-
-    $css = @'
-    <style>
-    body {font-family: Lucida Console;}
-    h1 {font-size:28pt;font-family:Helvetica, Arial, sans-serif;}
-    h2 {font-size:18pt;font-family:Helvetica, Arial, sans-serif;}
-    h3 {font-size:16pt;font-style: italic;font-weight: normal;font-family:Helvetica, Arial, sans-serif;}
-
-    table.summaryTable {border-style: none; font-family: Lucida Console;}
-    .summaryTable th{display:none;}
-    .summaryTable TR:Nth-Child(even) {Background-Color: #dcdcdc;}
-    .summaryTable td{padding: 5px;border-style: none;font-size: 14px;width: 500px}
-    .summaryTable td:first-child {font-weight: bold; width: 250px}
-    
-    table.warningsTable {border-style: none}
-    .warningsTable th{display:none;}
-    .warningsTable td{padding: 0px;border-style: none;font-size: 14px;}
-    .warningsTable td:first-child {font-weight: bold}
-    
-    table.improvementsTable {border-style: none}
-    .improvementsTable th{display:none;}
-    .improvementsTable td{padding: 0px;border-style: none;font-size: 14px;}
-    .improvementsTable td:first-child {font-weight: bold}
-    </style>
-'@
-
-    $head = $css + "<title>$($reportSubTitle)</title>"
-
-    $htmlReport = (ConvertTo-HTML -head $head -body "<h1>CodeScene Delta Analysis Result</h1><h3>$($reportSubTitle)</h3><hr>" -PostContent ($summary+$warnings+$improvements)) -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'" -replace '&quot;','"'
+    $htmlReport = ($summary+$warnings+$improvements) -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'" -replace '&quot;','"'
     return $htmlReport
 }
 
@@ -578,14 +592,19 @@ try {
     Write-VstsTaskVerbose "Team project:                      $($configuration.teamProject)"
 
     $context.commits = Get-Commits -context $context -configuration $configuration
-    $timer.analysisRunStarted = Get-Date
-    $testRun = New-VSTestRun -configuration $configuration -context $context -timer $timer
-    $analysisResult = Request-DeltaAnalysis -context $context -configuration $configuration -rules $rules
-    $timer.analysisRunCompleted = Get-Date
-    Add-VSTestResults -analysisResult $analysisResult -rules $rules -configuration $configuration -testRunId $testRun.id -context $context -timer $timer
-    Complete-VSTestRun -configuration $configuration -context $context -timer $timer -testRunId $testRun.id
-    if ($configuration.pipelineContext -eq "build") {
-        Publish-BuildTaskHtmlSummary -htmlSummary ($htmlReport = New-HtmlAnalysisReport -context $context -analysisResult $analysisResult -timer $timer) -configuration $configuration
+    if (![string]::IsNullOrEmpty($context.commits)) {
+        $timer.analysisRunStarted = Get-Date
+        $testRun = New-VSTestRun -configuration $configuration -context $context -timer $timer
+        $analysisResult = Request-DeltaAnalysis -context $context -configuration $configuration -rules $rules
+        $timer.analysisRunCompleted = Get-Date
+        Add-VSTestResults -analysisResult $analysisResult -rules $rules -configuration $configuration -testRunId $testRun.id -context $context -timer $timer
+        Complete-VSTestRun -configuration $configuration -context $context -timer $timer -testRunId $testRun.id
+        if ($configuration.pipelineContext -eq "build") {
+            Publish-BuildTaskHtmlSummary -htmlSummary ($htmlReport = New-HtmlAnalysisReport -context $context -analysisResult $analysisResult -timer $timer) -configuration $configuration
+        }
+    }
+    else {
+        Write-Host "No commits in this change. Skipping analysis..."
     }
 } finally {
     Trace-VstsLeavingInvocation $MyInvocation
