@@ -515,6 +515,7 @@ function New-PlainTextAnalysisReport {
 function New-HtmlAnalysisReport {
     param (
         [Parameter(Mandatory=$true)]$context,
+        [Parameter(Mandatory=$true)]$configuration,
         [Parameter(Mandatory=$true)]$analysisResult,
         [Parameter(Mandatory=$true)]$timer
     )
@@ -564,7 +565,8 @@ function New-HtmlAnalysisReport {
         $improvements = Set-HtmlElementAttribute -html $improvements -elementTag "table" -attribute "style=`"font-size: 14px`""
         $improvements = Remove-HtmlTableHeader $improvements
     }
-    $htmlReport = ($summary+$warnings+$improvements) -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'" -replace '&quot;','"'
+    $codeSceneReportLink = "<a href=`"$($configuration.codeSceneBaseUrl)$($analysisResult.view)`" target=`"_blank`">CodeScene Delta Analysis report</a>"
+    $htmlReport = ($summary+$warnings+$improvements+"<br>"+$codeSceneReportLink) -replace '&gt;','>' -replace '&lt;','<' -replace '&#39;',"'" -replace '&quot;','"'
     return $htmlReport
 }
 
@@ -600,7 +602,7 @@ try {
         Add-VSTestResults -analysisResult $analysisResult -rules $rules -configuration $configuration -testRunId $testRun.id -context $context -timer $timer
         Complete-VSTestRun -configuration $configuration -context $context -timer $timer -testRunId $testRun.id
         if ($configuration.pipelineContext -eq "build") {
-            Publish-BuildTaskHtmlSummary -htmlSummary ($htmlReport = New-HtmlAnalysisReport -context $context -analysisResult $analysisResult -timer $timer) -configuration $configuration
+            Publish-BuildTaskHtmlSummary -htmlSummary ($htmlReport = New-HtmlAnalysisReport -context $context -analysisResult $analysisResult -timer $timer -configuration $configuration) -configuration $configuration
         }
     }
     else {
