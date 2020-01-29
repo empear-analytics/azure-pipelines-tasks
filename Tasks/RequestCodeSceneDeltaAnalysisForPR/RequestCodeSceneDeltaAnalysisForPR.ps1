@@ -64,6 +64,99 @@ function Update-PullRequestIterationStatus {
     Invoke-RestMethod -Uri $statusApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header > $null
 }
 
+function Test-IsCodeChange {
+    param (
+        [Parameter(Mandatory=$true)]$warningDescription,
+        [Parameter(Mandatory=$true)]$rules
+    )
+    $extension = ($warningDescription -split ("\."))[-1]
+    if ($extension -in $rules.sourceCodeFileExtensions) {
+        return $true
+    }
+    return $false
+}
+
+function Add-PullRequestThread {
+    param (
+        [Parameter(Mandatory=$true)]$pullRequest,
+        [Parameter(Mandatory=$true)]$configuration,
+        [Parameter(Mandatory=$true)]$analysisResult,
+        [Parameter(Mandatory=$true)]$rules
+    )
+    $threadApiVersion = "5.1"
+    $threadApiUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/git/repositories/$($pullRequest.repositoryName)/pullRequests/$($pullRequest.id)/threads?api-version=$($threadApiVersion)"
+    $threads = @()
+    if (Get-RiskVerdict -risk $analysisResult.result.risk -threshold $rules.riskLevelThreshold.value) {
+        $threadStatus = "active"
+    }
+    else {
+        $threadStatus = "byDesign"
+    }
+    $threads += @{
+        comments = @(
+            @{
+                parentCommentId = 0
+                content = $analysisResult.result.description
+                commentType = "codeChange"
+            }
+        )
+        status = $threadStatus
+    }
+
+    if ($analysisResult.result.warnings.Count -gt 0) {
+        foreach ($warning in $analysisResult.result.warnings.GetEnumerator()) {
+            if ($rules.threadSettings.Item($warning.category)) {
+                foreach ($detail in $warning.details) {
+                    $content = $warning.category
+                    $detail = $detail.Replace($pullRequest.repositoryName, "")
+                    $thread = @{
+                        comments = @()
+                        threadContext = @{}
+                        status = "active"
+                    }
+                    if (Test-IsCodeChange -warningDescription $detail -rules $rules) {
+                        $threadContext = @{
+                            filePath = $detail
+                        }
+                        $thread.threadContext = $threadContext
+                    }
+                    else {
+                        $content += " " + $detail
+                    }
+                    $thread.comments += @{
+                        parentCommentId = 0
+                        content = $content
+                        commentType = "codeChange"
+                    }
+                    $threads += $thread
+                }
+            }
+        }
+    }
+
+    if ($analysisResult.result.improvements.Count -gt 0) {
+        foreach ($improvement in $analysisResult.result.improvements.GetEnumerator()) {
+            $threads += @{
+                comments = @(
+                    @{
+                        parentCommentId = 0
+                        content = $improvement
+                        commentType = "codeChange"
+                    }
+                )
+                status = "byDesign"
+            }
+        }
+    }
+
+    $header = Get-AzureDevOpsAPIHeader
+    foreach ($thread in $threads){
+        $payload = $thread | ConvertTo-Json -Depth 10
+        Write-VstsTaskVerbose "Adding pull request comment thread"
+        Invoke-RestMethod -Uri $threadApiUri -Method POST -Body $payload -ContentType "application/json " -Headers $header > $null
+    }
+}
+
 function Get-PullRequestCommits {
     param (
         [Parameter(Mandatory=$true)]$pullRequest,
@@ -148,6 +241,7 @@ function Request-DeltaAnalysis {
     }
     Write-VstsTaskVerbose "Commit Id(s):                      $($commitIds)"
     $deltaAnalysisApiUri = "$($configuration.codeSceneBaseUrl)/$($configuration.projectRESTEndpoint)"
+    # $deltaAnalysisApiUri = "https://stsingaporeinternaltest.azurewebsites.net/api/CodeSceneDeltaAnalysisMock"
     $credentialsPair = "$($configuration.codeSceneAPIUserName):$($configuration.codeSceneAPIPassword)"
     $basicToken = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($credentialsPair))
     $header = @{ Authorization = "Basic $($basicToken)" }
@@ -181,6 +275,25 @@ try {
     $rules.publishDeliveryRiskStatus = Get-VstsInput -Name publishDeliveryRiskStatus -AsBool
     $rules.publishPlannedGoalsStatus = Get-VstsInput -Name publishPlannedGoalsStatus -AsBool
     $rules.publishCodeHealthStatus = Get-VstsInput -Name publishCodeHealthStatus -AsBool
+
+    
+    $sourceCodeFileExtensions = (Get-VstsInput -Name sourceCodeFileExtensions).Replace(".", "")
+    $sourceCodeFileExtensions = $sourceCodeFileExtensions.Replace(" ", "")
+    $sourceCodeFileExtensions = $sourceCodeFileExtensions.Replace("*", "")
+
+    # $sourceCodeFileExtensions = "ts"
+
+    $rules.sourceCodeFileExtensions = $sourceCodeFileExtensions -split (",")
+    
+    $threadSettings = @{
+        "Modifies Hotspot" = $true;
+        "Absence of Expected Change Pattern" = $true;
+        "Degrades in Code Health" = $false;
+        "Violates Goals" = $false
+
+    }
+
+    $rules.threadSettings = $threadSettings
 
     $configuration.azureDevOpsAPItoken = Get-VstsInput -Name azureDevOpsAPItoken # Azure DevOps PAT to be used for local debugging. For more details, please see https://docs.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops#create-personal-access-tokens-to-authenticate-access
     $configuration.codeSceneBaseUrl = Get-VstsInput -Name codeSceneBaseUrl
@@ -224,6 +337,7 @@ try {
                 Update-PullRequestIterationStatus -pullRequest $pullRequest -status $status -configuration $configuration
             }
         }
+        Add-PullRequestThread -pullRequest $pullRequest -configuration $configuration -rules $rules -analysisResult $analysisResult
     }
     else {
         Write-Host "Not a pull request build!"

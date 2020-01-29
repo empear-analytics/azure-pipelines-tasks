@@ -11,15 +11,20 @@
   ],
   "demands": [],
   "version": {
-    "Major": "0",
-    "Minor": "4",
-    "Patch": "0"
+    "Major": "1",
+    "Minor": "0",
+    "Patch": "5"
   },
   "minimumAgentVersion": "1.95.0",
   "groups": [
       {
           "name": "rules",
           "displayName": "Analysis rules",
+          "isExpanded": false
+      },
+      {
+          "name": "advanced",
+          "displayName": "Advanced",
           "isExpanded": false
       }
   ],
@@ -113,6 +118,24 @@
         "required": true,
         "helpMarkDown": "Specifies minimal temporal coupling for the “Absence of Expected Change” warning.",
         "groupName": "rules"
+    },
+    {
+      "name": "sourceCodeFileExtensions",
+      "type": "string",
+      "label": "Source code file extensions",
+      "defaultValue": "*.js,*.cs,*.ts",
+      "required": false,
+      "helpMarkDown": "A comma separated list of file extensions to be interpreted as source code (used to properly attach comments to source code files).",
+      "groupName": "advanced"
+    },
+    {
+      "name": "azureDevOpsAPItoken",
+      "type": "string",
+      "label": "Alternate Azure DevOps access token",
+      "defaultValue": "",
+      "required": false,
+      "helpMarkDown": "Specify an alternate PAT to be used when accessing Azure DevOps.",
+      "groupName": "advanced"
     }
   ],
   "execution": {
