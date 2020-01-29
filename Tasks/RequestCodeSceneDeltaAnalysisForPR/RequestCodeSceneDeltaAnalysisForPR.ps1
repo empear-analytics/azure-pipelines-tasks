@@ -121,7 +121,7 @@ function Add-PullRequestThread {
                         $thread.threadContext = $threadContext
                     }
                     else {
-                        $content += " " + $detail
+                        $content += " - " + $detail
                     }
                     $thread.comments += @{
                         parentCommentId = 0
@@ -196,7 +196,7 @@ function Set-Statuses {
     $statuses = @{
         risk = @{
             statusContextName = "delivery-risk"
-            description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)"
+            description = "Delivery risk: $($analysisResult.result.risk)"
             targetUrl = $configuration.codeSceneBaseUrl + $analysisResult.view
             publish = $rules.publishDeliveryRiskStatus
         }
@@ -223,9 +223,6 @@ function Set-Statuses {
     foreach ($warning in $analysisResult.result.warnings) {
         $statusWarnings."$($warning.category)" = $warning.details
     }
-    if ($statuses.risk.failed) { $statuses.risk.description = "Delivery risk: $($analysisResult.result.risk) - $($analysisResult.result.description)" }
-    if ($statuses.goals.failed) { $statuses.goals.description = "Planned goals quality gate: Failed - $($statusWarnings.'Violates Goals')" }
-    if ($statuses.codeHealth.failed) { $statuses.codeHealth.description = "Code health quality gate: Failed - $($statusWarnings.'Degrades in Code Health')" }
     return $statuses
 }
 
@@ -288,8 +285,8 @@ try {
     $threadSettings = @{
         "Modifies Hotspot" = $true;
         "Absence of Expected Change Pattern" = $true;
-        "Degrades in Code Health" = $false;
-        "Violates Goals" = $false
+        "Degrades in Code Health" = $true;
+        "Violates Goals" = $true
 
     }
 
