@@ -92,16 +92,16 @@ function Add-PullRequestThread {
     else {
         $threadStatus = "byDesign"
     }
-    $threads += @{
-        comments = @(
-            @{
-                parentCommentId = 0
-                content = $analysisResult.result.description
-                commentType = "codeChange"
-            }
-        )
-        status = $threadStatus
-    }
+    # $threads += @{
+    #     comments = @(
+    #         @{
+    #             parentCommentId = 0
+    #             content = $analysisResult.result.description
+    #             commentType = "codeChange"
+    #         }
+    #     )
+    #     status = $threadStatus
+    # }
 
     if ($analysisResult.result.warnings.Count -gt 0) {
         foreach ($warning in $analysisResult.result.warnings.GetEnumerator()) {
@@ -134,20 +134,53 @@ function Add-PullRequestThread {
         }
     }
 
-    if ($analysisResult.result.improvements.Count -gt 0) {
-        foreach ($improvement in $analysisResult.result.improvements.GetEnumerator()) {
-            $threads += @{
-                comments = @(
-                    @{
-                        parentCommentId = 0
-                        content = $improvement
-                        commentType = "codeChange"
-                    }
-                )
-                status = "byDesign"
-            }
-        }
-    }
+    # if ($analysisResult.result.'code-health-delta-descriptions'.Count -gt 0) {
+    #     foreach ($codeHealtDeltaDescription in $analysisResult.result.'code-health-delta-descriptions'.GetEnumerator()) {
+    #         if ($rules.threadSettings.Item("code-health-delta-descriptions")) {
+    #             $content = "### Code health changes - " + $codeHealtDeltaDescription.name
+    #             $detailedName = $codeHealtDeltaDescription.'detailed-name'.Replace($pullRequest.repositoryName, "")
+    #             $thread = @{
+    #                 comments = @()
+    #                 threadContext = @{}
+    #                 status = "byDesign"
+    #             }
+    #             if (Test-IsCodeChange -warningDescription $detailedName -rules $rules) {
+    #                 $threadContext = @{
+    #                     filePath = $detailedName
+    #                 }
+    #                 $thread.threadContext = $threadContext
+    #             }
+    #             foreach ($item in $codeHealtDeltaDescription.degraded) {
+    #                 $content += "`r`n- **" + $item + "**"
+    #                 $thread.status = 'active'
+    #             }
+    #             foreach ($item in $codeHealtDeltaDescription.improved) {
+    #                 $content += "`r`n- " + $item
+    #             }
+    #             $thread.comments += @{
+    #                 parentCommentId = 0
+    #                 content = $content
+    #                 commentType = "codeChange"
+    #             }
+    #             $threads += $thread
+    #         }
+    #     }
+    # }
+
+    # if ($analysisResult.result.improvements.Count -gt 0) {
+    #     foreach ($improvement in $analysisResult.result.improvements.GetEnumerator()) {
+    #         $threads += @{
+    #             comments = @(
+    #                 @{
+    #                     parentCommentId = 0
+    #                     content = $improvement
+    #                     commentType = "codeChange"
+    #                 }
+    #             )
+    #             status = "byDesign"
+    #         }
+    #     }
+    # }
 
     $header = Get-AzureDevOpsAPIHeader
     foreach ($thread in $threads){
@@ -286,8 +319,8 @@ try {
         "Modifies Hotspot" = $true;
         "Absence of Expected Change Pattern" = $true;
         "Degrades in Code Health" = $true;
-        "Violates Goals" = $true
-
+        "Violates Goals" = $true;
+        "code-health-delta-descriptions" = $true
     }
 
     $rules.threadSettings = $threadSettings
