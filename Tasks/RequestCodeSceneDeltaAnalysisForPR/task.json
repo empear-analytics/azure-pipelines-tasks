@@ -12,8 +12,8 @@
   "demands": [],
   "version": {
     "Major": "1",
-    "Minor": "2",
-    "Patch": "2"
+    "Minor": "3",
+    "Patch": "0"
   },
   "minimumAgentVersion": "1.95.0",
   "groups": [
@@ -135,6 +135,15 @@
       "defaultValue": "",
       "required": false,
       "helpMarkDown": "Specify an alternate PAT to be used when accessing Azure DevOps.",
+      "groupName": "advanced"
+    },
+    {
+      "name": "removeOldComments",
+      "type": "boolean",
+      "label": "Remove old comments",
+      "defaultValue": true,
+      "required": false,
+      "helpMarkDown": "Specifies if old pull request comments from CodeScene should be deleted before adding new.",
       "groupName": "advanced"
     }
   ],

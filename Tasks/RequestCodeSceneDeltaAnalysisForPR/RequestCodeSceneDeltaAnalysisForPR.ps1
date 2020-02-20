@@ -19,6 +19,19 @@ function Get-AzureDevOpsAPIHeader {
     return $restApiHeader
 }
 
+function Get-AzureDevOpsUser {
+    param (
+        [Parameter(Mandatory=$true)]$configuration
+    )
+
+    $apiVersion = "6.0-preview.3"
+    $apiUrl = "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=$($apiVersion)"
+    $header = Get-AzureDevOpsAPIHeader
+    Write-VstsTaskVerbose "Fetching pull request iterations"
+    $response = Invoke-RestMethod -Uri $apiUrl -Method GET -Headers $header
+    return $response
+}
+
 function Get-LatestPullRequestIteration {
     param (
         [Parameter(Mandatory=$true)]$pullRequest,
@@ -29,7 +42,7 @@ function Get-LatestPullRequestIteration {
     $apiUrl = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/git/repositories/$($pullRequest.repositoryId)/pullRequests/$($pullRequest.id)/iterations?includeCommits=true&api-version=$($apiVersion)"
     $header = Get-AzureDevOpsAPIHeader
     Write-VstsTaskVerbose "Fetching pull request iterations"
-    $response = Invoke-RestMethod -Uri $apiUrl -Method GET -Body $payload -Headers $header
+    $response = Invoke-RestMethod -Uri $apiUrl -Method GET -Headers $header
     $iterations = $response.value
     $latestIterationId = 0
     foreach ($iteration in $iterations.GetEnumerator()) {
@@ -76,6 +89,42 @@ function Test-IsCodeChange {
     return $false
 }
 
+function Get-PullRequestThreads {
+    param (
+        [Parameter(Mandatory=$true)]$pullRequest,
+        [Parameter(Mandatory=$true)]$configuration
+    )
+    $activeThreads = @()
+    $header = Get-AzureDevOpsAPIHeader
+    $threadApiVersion = "5.1"
+    $threadApiUri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/git/repositories/$($pullRequest.repositoryName)/pullRequests/$($pullRequest.id)/threads?api-version=$($threadApiVersion)"
+    $threads = Invoke-RestMethod -Uri $threadApiUri -Method GET -ContentType "application/json " -Headers $header
+    foreach ($thread in $threads.value) {
+        if (!$thread.isDeleted) {
+            $activeThreads += $thread
+        }
+    }
+    return $activeThreads
+}
+
+function Remove-ThreadCommentsFromUser {
+    param (
+        [Parameter(Mandatory=$true)]$threads,
+        [Parameter(Mandatory=$true)]$configuration
+    )
+    $header = Get-AzureDevOpsAPIHeader
+    $apiVersion = "6.0-preview.1"
+    foreach ($thread in $threads) {
+        foreach ($comment in $thread.comments){
+            if ($comment.author.uniqueName -eq $configuration.user.emailAddress) {
+                $uri = "$($configuration.taskDefinitionsUri)$($configuration.teamProject)/_apis/git/repositories/$($pullRequest.repositoryName)/pullRequests/$($pullRequest.id)/threads/$($thread.id)/comments/$($comment.id)?api-version=$($apiVersion)"
+                Write-VstsTaskVerbose "Removing comment $($comment.id) from thread $($thread.id)"
+                $threads = Invoke-RestMethod -Uri $uri -Method Delete -ContentType "application/json " -Headers $header   
+            }         
+        }
+    }
+}
+
 function Add-PullRequestThread {
     param (
         [Parameter(Mandatory=$true)]$pullRequest,
@@ -108,13 +157,15 @@ function Add-PullRequestThread {
             if ($rules.threadSettings.Item($warning.category)) {
                 foreach ($detail in $warning.details) {
                     $content = $warning.category
-                    $detail = $detail.Replace($pullRequest.repositoryName, "")
+                    $pathArray = $detail.Split('/')
+                    $pathArray = $pathArray | Select-Object -Skip 1
+                    $path = '/' + ($pathArray -join '/')
                     $thread = @{
                         comments = @()
                         threadContext = @{}
                         status = "active"
                     }
-                    if (Test-IsCodeChange -warningDescription $detail -rules $rules) {
+                    if ((Test-IsCodeChange -warningDescription $path -rules $rules) -and ($warning.category -ne "Absence of Expected Change Pattern")) {
                         $threadContext = @{
                             filePath = $detail
                         }
@@ -138,7 +189,10 @@ function Add-PullRequestThread {
         foreach ($codeHealtDeltaDescription in $analysisResult.result.'code-health-delta-descriptions'.GetEnumerator()) {
             if ($rules.threadSettings.Item("code-health-delta-descriptions")) {
                 $content = "### Code health changes - " + $codeHealtDeltaDescription.name
-                $detailedName = $codeHealtDeltaDescription.'detailed-name'.Replace($pullRequest.repositoryName, "")
+                $path =  $codeHealtDeltaDescription.'detailed-name'
+                $pathArray = $path.Split('/')
+                $pathArray = $pathArray | Select-Object -Skip 1
+                $detailedName = '/' + ($pathArray -join '/')
                 $thread = @{
                     comments = @()
                     threadContext = @{}
@@ -306,13 +360,11 @@ try {
     $rules.publishDeliveryRiskStatus = Get-VstsInput -Name publishDeliveryRiskStatus -AsBool
     $rules.publishPlannedGoalsStatus = Get-VstsInput -Name publishPlannedGoalsStatus -AsBool
     $rules.publishCodeHealthStatus = Get-VstsInput -Name publishCodeHealthStatus -AsBool
-
+    $rules.removeOldComments = Get-VstsInput -Name removeOldComments -AsBool
     
     $sourceCodeFileExtensions = (Get-VstsInput -Name sourceCodeFileExtensions).Replace(".", "")
     $sourceCodeFileExtensions = $sourceCodeFileExtensions.Replace(" ", "")
     $sourceCodeFileExtensions = $sourceCodeFileExtensions.Replace("*", "")
-
-    # $sourceCodeFileExtensions = "ts"
 
     $rules.sourceCodeFileExtensions = $sourceCodeFileExtensions -split (",")
     
@@ -334,6 +386,7 @@ try {
     $configuration.statusGenre = "codescene-delta-analysis"
     $configuration.taskDefinitionsUri = $env:SYSTEM_TASKDEFINITIONSURI
     $configuration.teamProject = $env:SYSTEM_TEAMPROJECT
+    $configuration.user = Get-AzureDevOpsUser -configuration $configuration
     
     $pullRequest.repositoryName = $env:BUILD_REPOSITORY_NAME
     $pullRequest.repositoryId = $env:BUILD_REPOSITORY_ID
@@ -368,6 +421,11 @@ try {
                 Update-PullRequestIterationStatus -pullRequest $pullRequest -status $status -configuration $configuration
             }
         }
+        if ($rules.removeOldComments) {
+            $activeThreads = Get-PullRequestThreads -pullRequest $pullRequest -configuration $configuration
+            Remove-ThreadCommentsFromUser -threads $activeThreads -configuration $configuration
+        }
+
         Add-PullRequestThread -pullRequest $pullRequest -configuration $configuration -rules $rules -analysisResult $analysisResult
     }
     else {
