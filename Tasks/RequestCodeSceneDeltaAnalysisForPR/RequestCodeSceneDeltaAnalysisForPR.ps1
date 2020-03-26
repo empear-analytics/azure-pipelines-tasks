@@ -421,8 +421,8 @@ try {
                 Update-PullRequestIterationStatus -pullRequest $pullRequest -status $status -configuration $configuration
             }
         }
-        if ($rules.removeOldComments) {
-            $activeThreads = Get-PullRequestThreads -pullRequest $pullRequest -configuration $configuration
+        $activeThreads = Get-PullRequestThreads -pullRequest $pullRequest -configuration $configuration
+        if ($rules.removeOldComments -and $activeThreads) {
             Remove-ThreadCommentsFromUser -threads $activeThreads -configuration $configuration
         }
 
