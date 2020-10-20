@@ -205,7 +205,7 @@ function Add-PullRequestThread {
                     $thread.threadContext = $threadContext
                 }
                 foreach ($item in $codeHealtDeltaDescription.degraded) {
-                    $content += "`r`n- **" + $item + "**"
+                    $content += "`r`n- " + $item + ""
                     $thread.status = 'active'
                 }
                 foreach ($item in $codeHealtDeltaDescription.improved) {
